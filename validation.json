@@ -1,0 +1,138 @@
+{
+  "version": "0.4.1",
+  "date": "2026-09-23",
+  "scope": "Isolated Chromium 153, production GPUPixel WASM and packaged local service; public local fixtures. User Edge profile and websites not inspected.",
+  "playbackSummary": [
+    {
+      "speed": 1,
+      "observedSeconds": 8.014999999999418,
+      "renderedFrames": 481,
+      "renderFPS": 60.01247660636743,
+      "fullGeometryFrames": 481,
+      "fullGeometryRate": 1.0,
+      "swapDrawnFrames": 459,
+      "swapDrawnRate": 0.9542619542619543,
+      "pixelProbes": 9,
+      "medianRoundTripMs": 60.5,
+      "medianFrameBytes": 81859
+    },
+    {
+      "speed": 2,
+      "observedSeconds": 6.109000000000378,
+      "renderedFrames": 366,
+      "renderFPS": 59.91160582746396,
+      "fullGeometryFrames": 366,
+      "fullGeometryRate": 1.0,
+      "swapDrawnFrames": 366,
+      "swapDrawnRate": 1.0,
+      "pixelProbes": 7,
+      "medianRoundTripMs": 62.69999999925494,
+      "medianFrameBytes": 81601
+    }
+  ],
+  "extensionRegression": {
+    "browser": "153.0.8010.12",
+    "productionManifest": true,
+    "extensionId": "apamfckhomfpifcdadlphjjpbllfnpba",
+    "checks": [
+      "Production manifest loaded; expected stable extension ID",
+      "Browser toolbar action grants activeTab, without extra site permissions",
+      "Popup connects to packaged local FaceEngine",
+      "Production scripts inject and detect a face on paused video",
+      "Actual compiled GPUPixel WASM runtime is ready: GPUPixel 1.3.0 / 5415b738 / WASM",
+      "Straight alpha swap edge pixel check passes: error 0.447",
+      "Source upload and actual GPU face swap succeed: 37.91 ms",
+      "Composited video pixels change after face swap: 5874 pixels above 15/255",
+      "GPUPixel whitening applies after face swap: face ROI delta 27.26",
+      "Seek to empty scene clears browser face swap",
+      "Swap strength zero restores original video pixels",
+      "Beauty sliders affect browser composite independently of face-swap strength",
+      "Underlying playback and 2x speed continue during processing",
+      "Clear source removes face identity from bridge",
+      "Stop removes overlay and restores original page layout",
+      "Cross-origin video reports capture requirement, with original video retained"
+    ],
+    "errors": [],
+    "changedPixels": 5874,
+    "faceBeautyDelta": 27.257632504823516,
+    "alphaBlendError": 0.4470588235294102,
+    "swapAnalysisMs": 37.91,
+    "note": "Isolated Chromium test, localhost fixture. Edge user-profile installation and real sites not tested."
+  },
+  "asyncBounds": {
+    "passed": true,
+    "checks": [
+      "Brief miss keeps original timestamp",
+      "Repeated misses cannot extend 260ms expiry",
+      "Different track never inherits old identity",
+      "Inference failure clears previous result",
+      "Reset discards an in-flight completion"
+    ]
+  },
+  "exclusiveLoopbackPortVerified": true,
+  "native": {
+    "zeroMAE": 0.0,
+    "pausedMAE": 0.0,
+    "effectMAE": 8.812954821233985,
+    "swapChangedPixels": 11097,
+    "swapFaceBeautyDelta": 27.5403562524406,
+    "passed": true
+  },
+  "portableLauncher": {
+    "repeatedSeekSamePTS": 8,
+    "bridgeVersion": "0.4.1",
+    "passed": true
+  },
+  "realHeadPose": [
+    {
+      "clip": "head-pose-face-detection-female.mp4",
+      "fps": 12.0,
+      "frames": 144,
+      "expectedFaces": 1,
+      "startSeconds": 35,
+      "medianTrackingMs": 36.394999999999996,
+      "p95TrackingMs": 56.60399999999999,
+      "medianSwapMs": 28.16,
+      "p95SwapMs": 29.8645,
+      "trackedExpectedFrames": 126,
+      "swappedExpectedFrames": 101,
+      "steadyFrames": 132
+    },
+    {
+      "clip": "head-pose-face-detection-female-and-male.mp4",
+      "fps": 12.0,
+      "frames": 144,
+      "expectedFaces": 2,
+      "startSeconds": 35,
+      "medianTrackingMs": 49.875,
+      "p95TrackingMs": 77.931,
+      "medianSwapMs": 48.625,
+      "p95SwapMs": 50.9145,
+      "trackedExpectedFrames": 129,
+      "swappedExpectedFrames": 116,
+      "steadyFrames": 132
+    }
+  ],
+  "publicPackage": {
+    "version": "0.4.1",
+    "autoDownload": false,
+    "modelFreeStartup": {
+      "playback": true,
+      "gpupixel": true,
+      "faceTracking": false,
+      "modelFilesCreated": 0
+    },
+    "afterModelInstall": {
+      "faceTracking": 1,
+      "swapFaces": 1,
+      "gpupixel": true,
+      "version": "0.4.1"
+    },
+    "passed": true
+  },
+  "modelSetup": {
+    "allLocalHashesPassed": true,
+    "freshBeautyDownloadPassed": true,
+    "automaticDownload": false
+  }
+}

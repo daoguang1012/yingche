@@ -1,0 +1,5 @@
+InsightFace pretrained models: NON-COMMERCIAL RESEARCH ONLY.
+Code and weights have different terms.
+https://github.com/deepinsight/insightface#license
+https://github.com/yangxy/GPEN
+Public Yingche packages do not bundle these weights. Downloading does not grant broader rights.

@@ -1,0 +1,16 @@
+/app/
+/models/
+/data/
+/work/
+/build/
+/release/
+/dist/
+/tools/python/
+/tools/qt/
+/tools/emsdk/
+/tools/chromium*/
+/Yingche.exe
+__pycache__/
+*.pyc
+.env
+.env.*

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "映澈 · 网页美颜与换脸",
+  "version": "0.4.1",
+  "description": "GPUPixel 美颜与 Deep-Live-Cam 换脸，仅处理主动启用的网页视频。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz3hiIUv6EBYK/IUtDXD/o6HUv1Kkhsx1VGMyz4m1JPBB3r6QOooSJg9QG3OpZwOslonNyjIJyljdaWcIWyC+FGY80m+8TKXauV7hXN/lhVX/BCPYe22e/YOAgola1CiJZNLAHxsUGIw65zJILCYtgl4zQedMLvVvvu7cOIpIBau+8+RgUogebeAeJx7waf/npb4dKRdGj3PtidFxTd2IhDWriXLyTbwpevLv993lbo45TMk9bMXrR5pbcvFXarWThZEMOnDhh4cChspllzUvsrvcI/EpkZanvsQRDNzww9ZKbBZeh0KWOewPpxXGR18eYl4nZCHJMkCLjaMuFjZLiQIDAQAB",
+  "minimum_chrome_version": "132",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:18766/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "映澈网页增强"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  }
+}
