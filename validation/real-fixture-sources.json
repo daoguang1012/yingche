@@ -1,0 +1,16 @@
+[
+  {
+    "name": "driver-action-recognition.mp4",
+    "url": "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/driver-action-recognition.mp4",
+    "bytes": 53804027,
+    "sha256": "fd24e652c92a5759127aa9c7f23fea63d73aebb4bcea72763abe72ef06a20cf0",
+    "license": "CC-BY-4.0"
+  },
+  {
+    "name": "face-demographics-walking.mp4",
+    "url": "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/face-demographics-walking.mp4",
+    "bytes": 6406124,
+    "sha256": "91af68da819a9c0caab06c6c21414e6ebdb378ff28fee90e1f937165bc1007c6",
+    "license": "CC-BY-4.0"
+  }
+]

@@ -3,6 +3,7 @@ in vec2 uv;
 out vec4 frag;
 uniform sampler2D frameTex;
 uniform sampler2D originalTex;
+uniform sampler2D baseTex;
 uniform int gpupixelEnabled;
 uniform float trackingWeight;
 uniform vec2 faceMotion[4];
@@ -18,6 +19,7 @@ uniform int compareMode;
 uniform int faceCount;
 uniform int trackedFaceCount;
 uniform vec2 points[32];
+uniform float effectWeights[4];
 uniform float smoothValue, detailValue, whiteValue, warmValue, pinkValue;
 uniform float slimValue, eyesValue, chinValue, noseValue, lipValue, blushValue, sharpValue;
 float distancePx(vec2 a, vec2 b) { return length((a-b)*imageSize); }
@@ -54,16 +56,17 @@ void main() {
     vec2 t=vec2(p.x,1.0-p.y);
     for(int i=0;i<faceCount;i++) {
         int k=i*8;
+        float weight=trackingWeight*effectWeights[i];
         vec2 left=points[k+2], right=points[k+3], center=(left+right)*.5;
         float width=distancePx(left,right);
-        t=eyeWarp(t,points[k],width*.21,eyesValue*.0028*trackingWeight);
-        t=eyeWarp(t,points[k+1],width*.21,eyesValue*.0028*trackingWeight);
-        t=moveWarp(t,left,(left-center)*slimValue*.0015*trackingWeight,width*.55);
-        t=moveWarp(t,right,(right-center)*slimValue*.0015*trackingWeight,width*.55);
+        t=eyeWarp(t,points[k],width*.21,eyesValue*.0028*weight);
+        t=eyeWarp(t,points[k+1],width*.21,eyesValue*.0028*weight);
+        t=moveWarp(t,left,(left-center)*slimValue*.0015*weight,width*.55);
+        t=moveWarp(t,right,(right-center)*slimValue*.0015*weight,width*.55);
         vec2 chin=points[k+4], nose=points[k+5];
-        t=moveWarp(t,chin,(nose-chin)*chinValue*.0015*trackingWeight,width*.5);
-        t=moveWarp(t,points[k+6],(points[k+6]-nose)*noseValue*.003*trackingWeight,width*.19);
-        t=moveWarp(t,points[k+7],(points[k+7]-nose)*noseValue*.003*trackingWeight,width*.19);
+        t=moveWarp(t,chin,(nose-chin)*chinValue*.0015*weight,width*.5);
+        t=moveWarp(t,points[k+6],(points[k+6]-nose)*noseValue*.003*weight,width*.19);
+        t=moveWarp(t,points[k+7],(points[k+7]-nose)*noseValue*.003*weight,width*.19);
     }
     p=vec2(t.x,1.0-t.y);
     vec3 src=sourceAt(p);
@@ -74,6 +77,8 @@ void main() {
         if(distancePx(t,center)<distancePx(points[i*8+2],points[i*8+3])*.8)maskUV=t-faceMotion[i];
     }
     vec3 masks=texture(regionTex,maskUV).rgb*trackingWeight;
+    // GPUPixel remains the existing filter, but only current supported skin is blended.
+    if(gpupixelEnabled==1)src=mix(texture(baseTex,p).rgb,src,masks.r);
     vec3 skin=src;
     float bright=whiteValue/200.;
     if(gpupixelEnabled==1 && bright>=0.) bright=0.;

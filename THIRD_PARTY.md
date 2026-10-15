@@ -17,7 +17,7 @@ The local application dynamically loads Qt and libmpv. Unmodified upstream compo
 
 Tests use the MediaPipe public portrait fixture at https://storage.googleapis.com/mediapipe-assets/portrait.jpg and locally synthesized motion/test tones. This fixture is technical test data, not an Asian aesthetic benchmark. It is excluded from the portable application package. ffmpeg is a test-generation tool and is excluded from the runtime package.
 
-Model hashes and packaged file checksums are recorded in the deliverable manifest. The public release is model-free; model download URLs and hashes are supplied separately.
+Model hashes and packaged file checksums are recorded in the deliverable manifest. Native application models are installed separately. The Edge extension includes unchanged Framegen weights under their separate personal/non-commercial terms; see below.
 
 ## 0.2 additions: model restrictions matter
 
@@ -61,4 +61,14 @@ Real head-pose test clips: https://github.com/intel-iot-devkit/sample-videos , h
 
 ## Public release layout
 
-Project-authored and integrated source is distributed under AGPL-3.0. Individual upstream files retain their own notices. The public snapshot omits unused Mars face-kit/MNN binaries; GPUPIXEL_ENABLE_FACE_DETECTOR=OFF remains required. Public application weights are not bundled. Small ONNX Runtime example models are omitted from the public runtime as well. No photos, playback history, browser profiles or local credentials are included.
+Project-authored and integrated source is distributed under AGPL-3.0. Individual upstream files retain their own notices. The public snapshot omits unused Mars face-kit/MNN binaries; GPUPIXEL_ENABLE_FACE_DETECTOR=OFF remains required. Native face-tracking and face-swap weights are not bundled. Framegen browser weights are the explicitly documented exception. Small ONNX Runtime example models are omitted from the public runtime as well. No photos, playback history, browser profiles or local credentials are included.
+
+## 0.6.0 additional real validation fixtures
+
+Intel IoT DevKit sample-videos, https://github.com/intel-iot-devkit/sample-videos , CC BY 4.0. Additional files are driver-action-recognition.mp4 (1920x1080, 30 fps; car cabin, hand/phone occlusion and real edits) and face-demographics-walking.mp4 (768x432, 12 fps; entry/exit). URLs, sizes and SHA256 values are recorded in validation/real-fixture-sources.json. These original files and captured original/processed comparison frames are local test material, not bundled runtime assets. The player adds no interpolation to this native validation footage. Visual quality is not established by counters alone. No new model was downloaded for 0.6.0.
+
+## 0.5.0 browser frame interpolation
+
+Framegen 1.4.0, https://github.com/MONZikWasTaken/Framegen , commit `7440e8f432818836639e3177d7764e8ed892f3c7`. Runtime code is MIT. ES module export keywords are removed and the unchanged runtime body is wrapped in an isolated-world global for MV3 script injection. `rt_v7s.bin` and its manifest are bundled unchanged. Weights are licensed for personal and non-commercial research use only, with unchanged redistribution permitted when the notice is retained. Code license, model notice and SHA256 provenance are in `edge-extension/vendor/framegen/`.
+
+The new scheduler, scene-change guard, resource lifecycle, fallback and presentation integration are project code in `edge-extension/interpolation.js` and `content.js`. Model inference runs on local WebGPU; there is no cloud inference or CDN fetch during use.

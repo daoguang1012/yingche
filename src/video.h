@@ -32,6 +32,7 @@ public:
     void setBeautyEnabled(bool enabled);
     void setBeautyEngine(const QString& engine);
     void setCompare(bool compare);
+    void setOriginalPreview(bool value);
     void setSwapEnabled(bool enabled);
     void setSwapSource(const QString& path);
     void setSwapOptions(const QString& target, int feather, int strength);
@@ -71,6 +72,7 @@ private:
     std::unique_ptr<QOpenGLFramebufferObject> frame_;
     std::unique_ptr<QOpenGLFramebufferObject> analysis_;
     std::unique_ptr<QOpenGLFramebufferObject> composite_;
+    std::unique_ptr<QOpenGLFramebufferObject> cutSample_;
     std::unique_ptr<QOpenGLShaderProgram> shader_;
     GLuint vao_ = 0, maskTexture_ = 0, swapTexture_ = 0;
     QProcess* worker_ = nullptr;
@@ -84,6 +86,20 @@ private:
     QString sourcePath_, swapTarget_ = "largest";
     int swapFeather_ = 35, swapStrength_ = 100, swapFaces_ = 0;
     bool maskDirty_ = true, beautyEnabled_ = true, compare_ = false;
+    bool originalPreview_ = false;
+    bool fallbackNotice_=false;
+    QImage previousCutSample_;
+    int cuts_=0;
+    double trackingWeight_=0.;
+    QJsonArray faceSignals_;
+    std::array<float,4> effectWeights_{};
+    QTimer transitionTimer_;
+    qint64 beautyChangedAt_=0;
+    QJsonObject displayedBeauty_=defaultBeauty();
+    QJsonObject transitionFromBeauty_=defaultBeauty();
+    bool beautyTransitionPending_=false;
+    int cutReadbackSamples_=0;
+    double cutReadbackMs_=0.,cutReadbackMaxMs_=0.;
     bool glFunctionsReady_ = false, eofSignaled_ = false;
     bool awaitingPlayback_ = false;
     bool needFrame_ = true, loaded_ = false, workerReady_ = false, busy_ = false, stopping_ = false;

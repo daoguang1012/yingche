@@ -1,4 +1,14 @@
-# 映澈 0.4.1 architecture
+# 映澈 0.6.0 architecture
+
+Desktop 0.6.0: BeautyPlayerV060.exe uses app/face_engine_v060/FaceEngine.exe. GPUPixel output is mixed with its input only inside current supported skin. beauty_stability.py uses observed flow support, RANSAC inliers, confirmation age and face-ROI chroma/luminance, with no invented detector confidence. It motion-aligns prior masks, bounds them by current support, filters chroma and ramps per-face strength. No semantic occlusion/hair model was added. Parameters transition over 180 ms; a pending flag guarantees the terminal paused repaint. Playing masks fade from 120 to 200 ms of sample age; paused current poses stay editable. Generation changes reset history. A 32x18 per-frame difference check can invalidate faces before drawing a detected cut, but remains a heuristic.
+
+Picture persistence: settings-v2.json is separate from legacy settings.json. Global defaults, per-media overrides and temporary preview have distinct semantics. Bounded SHA256 samples (up to 192 KiB plus size/offsets) identify moves/copies independently of names. Same-sized changes outside sampled regions can alias: this is not a full integrity hash. Read failure selects temporary scope. Invalid/future/oversized settings are preserved with a persistent no-save message. QSaveFile writes are checked; load/write limits are both 4 MiB, new media records stop at 2000 without evicting existing records.
+
+Dual display: the original PlayerWindow retains VideoWidget/mpv/OpenGL; only ordinary header/menu/side/footer widgets move into a controls window. Closing controls or screenRemoved pauses and reunites. Closing the video window tears down the worker and both windows. Deactivation releases original preview. Comparison uses textures from the single render frame. Internal resolution cap remains 2560x1440.
+
+Browser 0.6.0 changes are limited to versioning, explicit experimental copy and defaults/migration. VSR presentation, interpolation and browser beauty renderer are unchanged. The frozen 0.4.1 bridge is retained; protocol 0.4.1 is checked independently of extension version 0.6.0. Desktop stable masks are requested with stableBeauty: true, not advertised as a browser change.
+
+The existing window-beauty project was neither inspected nor reused.
 
 Native: libmpv RGBA8 FBO -> asynchronous face-swap precomposition -> actual GPUPixel BeautyFaceFilter -> local geometry/makeup shader -> Qt QOpenGLWidget. Qt 6.8.3 / C++17 / OpenGL 3.3 compatibility context. GPUPixel executes in the current host context; no extra GLFW window. Host boundaries reset GL state. SDK resource paths accept Unicode.
 
@@ -14,11 +24,11 @@ AsyncSwap owns independent ONNX Runtime DirectML sessions on its worker thread. 
 
 Native IPC: JSON header + bounded raw RGBA, one request in flight. 8ms scheduling checks are not a claimed 125fps inference rate. Request generation, PTS and render serial reject old frames. Seek/start waits for MPV playback restart and refreshed render. Worker failures keep the original video; reselecting a source restarts a failed process.
 
-MV3: activeTab/scripting/storage, loopback-only host permission, stable extension ID. One active enhanced tab; enabling another stops the previous overlay so trackers do not alternate streams. Bridge checks Host, Origin, extension ID and ephemeral token; frame requests cannot read arbitrary local files. Browser and bridge versions must both be 0.4.1. Cross-origin capture uses an explicit browser picker. User Edge profile was not modified by tests.
+MV3: activeTab/scripting/storage, loopback-only host permission, stable extension ID. One active enhanced tab; enabling another stops the previous overlay so trackers do not alternate streams. Bridge checks Host, Origin, extension ID and ephemeral token; frame requests cannot read arbitrary local files. Extension version is 0.6.0; bridge protocol remains 0.4.1. Cross-origin capture uses an explicit browser picker. User Edge profile was not modified by tests.
 
-Build: CMake builds actual vendored GPUPixel with host adapters, then BeautyPlayerV041.exe and a Yingche.exe launcher. PyInstaller packages face_worker.py, tracking, DLC/InsightFace runtime and bridge as app/face_engine_v041/FaceEngine.exe. Browser compilation is tools/build_gpupixel_web.py. Build requirements and corresponding sources are included; toolchains are not shipped. Old releases are preserved.
+Build: CMake builds vendored GPUPixel with host adapters, BeautyPlayerV060.exe and work/v060/Yingche.exe. PyInstaller packages the current worker/tracking/stability as app/face_engine_v060/FaceEngine.exe. The prior frozen worker remains for the browser bridge. No browser WASM rebuild was needed for 0.6.0. Old releases are preserved.
 
-Portable staging excludes user settings/history, private photos, test browser profiles and old runtimes. Tests using --control-dir isolate settings from normal playback. The public release is staged separately without model weights or local state.
+Portable staging excludes user settings/history, private photos, test browser profiles and old runtimes. Tests using --control-dir isolate settings from normal playback. tools/package_v041.py stages, checksums and archives the release.
 
 0.4.1 browser playback: reuse a 2D OffscreenCanvas and send JPEG at quality 0.94 (max 960x720, no upscale) through the MV3 bridge. The source video texture remains uncompressed by this transport. Capture PTS/time/generation/config are sampled together before encoding; obsolete completions are discarded. Native IPC stays raw. GPUPixel input caching uses decoded frame count, and rendering is capped around 60Hz. Renderer pose lifetime follows measured transport + update interval, clamped to 220–350ms with an 80ms fade. Paused current poses are stable, seeking invalidates them, and visibility resume reacquires. Actual drawing counts/weight and end-to-end roundtrip are exposed in status.
 

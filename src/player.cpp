@@ -1,4 +1,5 @@
 #include "player.h"
+#include "media_identity.h"
 #include <QApplication>
 #include <QActionGroup>
 #include <QDateTime>
@@ -24,6 +25,9 @@
 #include <QLineEdit>
 #include <QDesktopServices>
 #include <QImageReader>
+#include <QKeyEvent>
+#include <QWindow>
+#include <QThread>
 
 namespace {
 QString timeText(double seconds) {
@@ -56,9 +60,14 @@ void SeekSlider::mouseReleaseEvent(QMouseEvent* e) {
 }
 PlayerWindow::PlayerWindow(const QString& root,const QString& controlDir,QWidget* parent)
 :QMainWindow(parent),root_(root),controlDir_(controlDir) {
-    setWindowTitle("映澈 0.4.1 · GPUPixel / Deep-Live-Cam"); setAcceptDrops(true); resize(1220,760); setMinimumSize(850,560);
+    setWindowTitle("映澈 0.6.0 · 自然人像"); setAcceptDrops(true); resize(1220,760); setMinimumSize(850,560);
     QDir().mkpath(QDir(root_).filePath("data"));
     loadSettings(); buildUi(); buildMenus(); applyBeauty(beauty_);
+    beautyToggle_->setChecked(loadedEnabled_);pictureStatus_->setText(settingsNotice_.isEmpty()?"全局默认 · 新视频从这里开始":settingsNotice_);
+    qApp->installEventFilter(this);
+    connect(qApp,&QGuiApplication::screenRemoved,this,[this](QScreen*){
+        if(controlsWindow_)reuniteView(true);
+    });
     connect(&tick_,&QTimer::timeout,this,&PlayerWindow::updatePlayback); tick_.start(200);
     seekDebounce_.setSingleShot(true); seekDebounce_.setInterval(100);
     connect(&seekDebounce_,&QTimer::timeout,this,[this]{ video_->seek(timeline_->value()/1000.); });
@@ -68,7 +77,7 @@ PlayerWindow::PlayerWindow(const QString& root,const QString& controlDir,QWidget
 }
 void PlayerWindow::buildUi() {
     auto* central=new QWidget(this); setCentralWidget(central);
-    auto* layout=new QVBoxLayout(central); layout->setSpacing(0); layout->setContentsMargins(0,0,0,0);
+    auto* layout=new QVBoxLayout(central);mainLayout_=layout; layout->setSpacing(0); layout->setContentsMargins(0,0,0,0);
     header_=new QWidget(central); header_->setObjectName("header");
     auto* top=new QHBoxLayout(header_); top->setContentsMargins(20,12,20,12);
     auto* brand=new QLabel("映澈",header_); brand->setObjectName("brand"); top->addWidget(brand);
@@ -77,10 +86,12 @@ void PlayerWindow::buildUi() {
     fileLabel_=new QLabel("本地视频 · 自然美颜",header_); fileLabel_->setObjectName("fileTitle"); top->addWidget(fileLabel_,1);
     auto* open=button("打开视频","openButton",header_); open->setProperty("accent",true); top->addWidget(open);
     auto* sideButton=button("面板","panelButton",header_); top->addWidget(sideButton);
+    auto* separate=button("双屏 / 合并","separateView",header_);top->addWidget(separate);
+    connect(separate,&QPushButton::clicked,this,&PlayerWindow::toggleSeparateView);
     connect(open,&QPushButton::clicked,this,&PlayerWindow::openDialog);
     connect(sideButton,&QPushButton::clicked,this,[this]{ side_->setVisible(!side_->isVisible()); });
     layout->addWidget(header_);
-    auto* middle=new QSplitter(Qt::Horizontal,central); middle->setChildrenCollapsible(false);
+    auto* middle=new QSplitter(Qt::Horizontal,central);middle_=middle; middle->setChildrenCollapsible(false);
     video_=new VideoWidget(root_,middle); middle->addWidget(video_);
     side_=new QTabWidget(middle); side_->setObjectName("sidePanel"); side_->setMinimumWidth(275); side_->setMaximumWidth(380);
     auto* scroll=new QScrollArea(side_); scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
@@ -88,21 +99,29 @@ void PlayerWindow::buildUi() {
     auto* beautyLayout=new QVBoxLayout(beautyPanel); beautyLayout->setContentsMargins(18,16,18,20); beautyLayout->setSpacing(12);
     beautyToggle_=new QCheckBox("开启人像美颜",beautyPanel); identify(beautyToggle_,"beautyEnabled","开启人像美颜"); beautyToggle_->setChecked(true);
     beautyLayout->addWidget(beautyToggle_);
+    pictureScope_=new QComboBox(beautyPanel);identify(pictureScope_,"pictureScope","画面设置范围");
+    pictureScope_->addItems({"单片设置 · 自动保存","全局默认 · 用于新视频","临时预览 · 不保存"});pictureScope_->setCurrentIndex(1);
+    beautyLayout->addWidget(pictureScope_);
+    pictureStatus_=new QLabel(beautyPanel);pictureStatus_->setWordWrap(true);pictureStatus_->setObjectName("muted");beautyLayout->addWidget(pictureStatus_);
+    connect(pictureScope_,qOverload<int>(&QComboBox::currentIndexChanged),this,&PlayerWindow::restorePicture);
     auto* engineLabel=new QLabel("GPUPixel 1.3 · 肤质引擎",beautyPanel);
     identify(engineLabel,"beautyEngine","GPUPixel 美颜引擎");beautyLayout->addWidget(engineLabel);
     compareToggle_=new QCheckBox("左右对比 · 左侧原画",beautyPanel); identify(compareToggle_,"compareEnabled","左右对比"); beautyLayout->addWidget(compareToggle_);
+    holdOriginal_=button("按住看原片 · R","holdOriginal",beautyPanel);beautyLayout->addWidget(holdOriginal_);
+    connect(holdOriginal_,&QPushButton::pressed,this,[this]{previewOriginal(true);});
+    connect(holdOriginal_,&QPushButton::released,this,[this]{previewOriginal(false);});
     auto* presetRow=new QHBoxLayout();
-    for(const QString& label:{"自然","通透","明显"}) {
+    for(const QString& label:{"自然","柔和","暗光"}) {
         auto* b=button(label,"preset"+label,beautyPanel); presetRow->addWidget(b);
         connect(b,&QPushButton::clicked,this,[this,label] {
             QJsonObject p=defaultBeauty();
-            if(label=="通透") { p["smooth"]=70;p["white"]=50;p["pink"]=20;p["detail"]=75;p["slim"]=15;p["eyes"]=10; }
-            if(label=="明显") { p["smooth"]=125;p["white"]=95;p["pink"]=35;p["detail"]=55;p["slim"]=45;p["eyes"]=35;p["lip"]=25; }
-            applyBeauty(p); saveDebounce_.start();
+            if(label=="柔和") { p["smooth"]=40;p["white"]=12;p["detail"]=70;p["sharp"]=4; }
+            if(label=="暗光") { p["smooth"]=18;p["white"]=35;p["pink"]=0;p["sharp"]=0; }
+            applyBeauty(p);rememberPicture(); saveDebounce_.start();
         });
     }
     beautyLayout->addLayout(presetRow);
-    auto* tip=new QLabel("宽范围调节 · 数值可直接输入",beautyPanel); tip->setObjectName("muted"); beautyLayout->addWidget(tip);
+    auto* tip=new QLabel("局部温和调节 · 暗光预设不恢复丢失细节",beautyPanel);tip->setWordWrap(true); tip->setObjectName("muted"); beautyLayout->addWidget(tip);
     int index=0;
     for(const auto& p:parameters) {
         if(index==0||index==5||index==9) {
@@ -120,12 +139,12 @@ void PlayerWindow::buildUi() {
         connect(field,qOverload<int>(&QSpinBox::valueChanged),slider,&QSlider::setValue);
         const QString key=QString::fromLatin1(p.key); fields_.insert(key,field);
         connect(field,qOverload<int>(&QSpinBox::valueChanged),this,[this,key](int value){
-            beauty_[key]=value; if(!applying_) { video_->setBeauty(beauty_); saveDebounce_.start(); }
+            beauty_[key]=value; if(!applying_) { video_->setBeauty(beauty_);rememberPicture(); saveDebounce_.start(); }
         });
         row->addWidget(slider); beautyLayout->addLayout(row); ++index;
     }
-    auto* reset=button("重置全部参数","resetBeauty",beautyPanel); beautyLayout->addWidget(reset);
-    connect(reset,&QPushButton::clicked,this,[this]{applyBeauty(defaultBeauty());saveDebounce_.start();});
+    auto* reset=button("重置当前范围","resetBeauty",beautyPanel); beautyLayout->addWidget(reset);
+    connect(reset,&QPushButton::clicked,this,&PlayerWindow::resetPicture);
     beautyLayout->addStretch();
     scroll->setWidget(beautyPanel); side_->addTab(scroll,"美颜");
     buildSwapPanel();
@@ -163,7 +182,7 @@ void PlayerWindow::buildUi() {
     connect(speed_,qOverload<double>(&QDoubleSpinBox::valueChanged),this,[this](double speed){video_->property("speed",QString::number(speed));});
     connect(volume_,&QSlider::valueChanged,this,[this](int volume){video_->property("volume",QString::number(volume));});
     connect(mute_,&QCheckBox::toggled,this,[this](bool b){video_->property("mute",b?"yes":"no");});
-    connect(beautyToggle_,&QCheckBox::toggled,video_,&VideoWidget::setBeautyEnabled);
+    connect(beautyToggle_,&QCheckBox::toggled,this,[this](bool value){video_->setBeautyEnabled(value);if(!applying_){rememberPicture();saveDebounce_.start();}});
     connect(compareToggle_,&QCheckBox::toggled,video_,&VideoWidget::setCompare);
     connect(video_,&VideoWidget::doubleClicked,this,&PlayerWindow::toggleFullscreen);
     connect(video_,&VideoWidget::analysisStatus,analysisLabel_,&QLabel::setText);
@@ -179,7 +198,8 @@ void PlayerWindow::buildUi() {
 void PlayerWindow::buildSwapPanel() {
     auto* scroll=new QScrollArea(side_);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);
     auto* panel=new QWidget(scroll);auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(18,18,18,18);layout->setSpacing(13);
-    auto* title=new QLabel("Deep-Live-Cam · 照片换脸",panel);title->setObjectName("sectionLabel");layout->addWidget(title);
+    auto* title=new QLabel("实验功能 · 照片换脸",panel);title->setObjectName("sectionLabel");layout->addWidget(title);
+    auto* warning=new QLabel("跟踪和遮挡处理仍不稳定。每次启动默认关闭，请主动启用。",panel);warning->setWordWrap(true);layout->addWidget(warning);
     auto* select=button("选择源照片…","selectSwapSource",panel);select->setProperty("accent",true);layout->addWidget(select);
     connect(select,&QPushButton::clicked,this,&PlayerWindow::chooseSwapSource);
     sourceLabel_=new QLabel("选择清晰正面照；多人照片取最大人脸",panel);sourceLabel_->setWordWrap(true);sourceLabel_->setObjectName("muted");layout->addWidget(sourceLabel_);
@@ -214,7 +234,7 @@ void PlayerWindow::chooseSwapSource() {
     if(path.isEmpty())return;
     QImageReader reader(path);reader.setAutoTransform(true);
     if(!reader.canRead()) {swapLabel_->setText("无法读取这张照片");return;}
-    sourceLabel_->setText(QFileInfo(path).fileName());video_->setSwapSource(path);swapToggle_->setChecked(true);
+    sourceLabel_->setText(QFileInfo(path).fileName());video_->setSwapSource(path);
 }
 void PlayerWindow::setBridgeEnabled(bool enabled) {
     if(!enabled) {
@@ -242,6 +262,7 @@ void PlayerWindow::setBridgeEnabled(bool enabled) {
     else bridge_->start(QDir(root_).filePath("tools/python/Scripts/python.exe"),{"-u",QDir(root_).filePath("tools/face_worker.py"),"--bridge",model,config});
 }
 void PlayerWindow::buildMenus() {
+    menus_=menuBar();
     auto* files=menuBar()->addMenu("文件");
     auto* playback=menuBar()->addMenu("播放");
     auto* view=menuBar()->addMenu("画面");
@@ -265,6 +286,7 @@ void PlayerWindow::buildMenus() {
     auto* loop=playback->addAction("单段循环"); loop->setCheckable(true);
     connect(loop,&QAction::toggled,this,[this](bool b){video_->property("loop-file",b?"inf":"no");});
     view->addAction("全屏 / 窗口",QKeySequence("F11"),this,&PlayerWindow::toggleFullscreen);
+    view->addAction("分离到另一屏 / 合并",QKeySequence("F10"),this,&PlayerWindow::toggleSeparateView);
     view->addAction("退出全屏",QKeySequence("Esc"),this,[this]{if(isFullScreen())toggleFullscreen();});
     auto* top=view->addAction("窗口置顶");top->setCheckable(true);
     connect(top,&QAction::toggled,this,[this](bool b){setWindowFlag(Qt::WindowStaysOnTopHint,b);show();});
@@ -293,7 +315,7 @@ void PlayerWindow::buildMenus() {
     });
     auto* help=menuBar()->addMenu("帮助");
     help->addAction("快捷键",this,[this]{QMessageBox::information(this,"操作快捷键","Ctrl+O 打开视频\n空格 播放/暂停\n← / → 后退/前进 5 秒\n, / . 逐帧后退/前进\n[ / ] 减速/加速\nBackspace 恢复 1 倍速\nCtrl+G 跳转时间\nF11 / 双击画面 全屏\nF8 显示/隐藏面板\nB 美颜开关\nC 左右对比\nCtrl+S 保存当前画面");});
-    help->addAction("关于映澈",this,[this]{QMessageBox::information(this,"映澈 0.4.1","本地实时美颜播放器\nGPUPixel 1.3 · Deep-Live-Cam 换脸\n\n播放器与 Edge 扩展共用新版处理流程。\n源照片与画面在本机处理。\n模型、许可和使用说明见程序目录。");});
+    help->addAction("关于映澈",this,[this]{QMessageBox::information(this,"映澈 0.6.0","本地实时美颜播放器\n局部自然美颜 · 单片参数记忆\nR 按住看原片 · F10 双屏 / 合并\n换脸、Edge 补帧为实验功能，默认关闭。\n源照片与画面在本机处理。");});
     // Keep keyboard actions active while the menu bar is hidden in fullscreen.
     for(auto* action:findChildren<QAction*>()) {
         if(!action->shortcut().isEmpty()) addAction(action);
@@ -338,6 +360,9 @@ void PlayerWindow::openFiles(const QStringList& files) {
 void PlayerWindow::openFile(const QString& f) {
     if(!QFileInfo(f).isFile()) {status_->setText("找不到视频文件");return;}
     updatePlayback();saveSettings();currentFile_=QFileInfo(f).absoluteFilePath();
+    previewOriginal(false);mediaKey_=mediaIdentity(currentFile_);
+    {QSignalBlocker block(pictureScope_);pictureScope_->setCurrentIndex(mediaKey_.isEmpty()?2:0);}
+    restorePicture(pictureScope_->currentIndex());
     resumeAt_=positions_.value(currentFile_).toDouble(); resumePending_=true;
     lastDirectory_=QFileInfo(f).absolutePath();
     fileLabel_->setText(QFileInfo(f).fileName());fileLabel_->setToolTip(currentFile_);
@@ -369,12 +394,14 @@ void PlayerWindow::screenshot() {
     if(!path.isEmpty())video_->saveFrame(path);
 }
 void PlayerWindow::toggleFullscreen() {
+    previewOriginal(false);
+    if(controlsWindow_) {if(isFullScreen())showNormal();else showFullScreen();return;}
     if(isFullScreen()) {
         if(wasMaximized_)showMaximized();else showNormal();
-        menuBar()->show();header_->show();side_->setVisible(sideBeforeFull_);
+        menus_->show();header_->show();footer_->show();side_->setVisible(sideBeforeFull_);
     } else {
         wasMaximized_=isMaximized();sideBeforeFull_=side_->isVisible();
-        menuBar()->hide();header_->hide();side_->hide();showFullScreen();
+        menus_->hide();header_->hide();footer_->hide();side_->hide();showFullScreen();
     }
 }
 void PlayerWindow::applyBeauty(const QJsonObject& values) {
@@ -382,24 +409,150 @@ void PlayerWindow::applyBeauty(const QJsonObject& values) {
     for(auto it=fields_.cbegin();it!=fields_.cend();++it)it.value()->setValue(beauty_.value(it.key()).toInt());
     applying_=false;if(video_)video_->setBeauty(beauty_);
 }
+QString PlayerWindow::settingsPath() const {
+    return QDir(controlDir_.isEmpty()?QDir(root_).filePath("data"):controlDir_).filePath("settings-v2.json");
+}
+void PlayerWindow::rememberPicture() {
+    if(applying_||!pictureScope_)return;
+    if(!settingsWritable_){pictureStatus_->setText(settingsNotice_+" · 调整仅本次有效");return;}
+    QJsonObject value{{"beauty",beauty_},{"enabled",beautyToggle_->isChecked()}};
+    const int scope=pictureScope_->currentIndex();
+    if(scope==1)defaults_=value;
+    else if(scope==0 && !mediaKey_.isEmpty()) {
+        if(!mediaSettings_.contains(mediaKey_) && mediaSettings_.size()>=2000) {
+            QSignalBlocker block(pictureScope_);pictureScope_->setCurrentIndex(2);
+            pictureStatus_->setText("单片设置已达 2000 条，本片仅临时生效；已有设置保留");return;
+        }
+        mediaSettings_[mediaKey_]=value;
+    }
+    pictureStatus_->setText(scope==2?"临时预览，切换范围或换片后丢弃":scope==1?"正在保存全局默认":mediaKey_.isEmpty()?"未识别媒体，本次不保存":"正在保存此视频的画面参数");
+}
+void PlayerWindow::restorePicture(int scope) {
+    if(scope==2) {
+        if(mediaKey_.isEmpty()) {
+            applyBeauty(defaults_.value("beauty").toObject());
+            applying_=true;beautyToggle_->setChecked(defaults_.value("enabled").toBool(true));applying_=false;
+        }
+        pictureStatus_->setText(!settingsWritable_?settingsNotice_:mediaKey_.isEmpty()?"无法建立媒体标识，本片仅临时预览":"临时预览 · 不保存");return;
+    }
+    const auto saved=scope==0?mediaSettings_.value(mediaKey_).toObject():QJsonObject();
+    const auto value=saved.isEmpty()?defaults_:saved;
+    applyBeauty(value.value("beauty").toObject());
+    applying_=true;beautyToggle_->setChecked(value.value("enabled").toBool(true));applying_=false;
+    pictureStatus_->setText(scope==1?"全局默认 · 用于新视频":mediaKey_.isEmpty()?"尚未打开可识别的视频":saved.isEmpty()?"此视频继承全局默认；调节后自动单独保存":"已恢复此视频的画面参数");
+    if(!settingsWritable_)pictureStatus_->setText(settingsNotice_+" · 调整仅本次有效");
+}
+void PlayerWindow::resetPicture() {
+    const int scope=pictureScope_->currentIndex();
+    if(scope==0){mediaSettings_.remove(mediaKey_);restorePicture(0);}
+    else if(scope==1){defaults_={{"beauty",defaultBeauty()},{"enabled",true}};restorePicture(1);}
+    else {applyBeauty(defaults_.value("beauty").toObject());applying_=true;beautyToggle_->setChecked(defaults_.value("enabled").toBool(true));applying_=false;}
+    saveDebounce_.start();
+}
+void PlayerWindow::previewOriginal(bool value) {
+    originalHeld_=value;if(video_)video_->setOriginalPreview(value);
+    if(!value && holdOriginal_)holdOriginal_->setDown(false);
+}
+bool PlayerWindow::eventFilter(QObject* object,QEvent* event) {
+    if(event->type()==QEvent::ApplicationDeactivate || event->type()==QEvent::WindowDeactivate)previewOriginal(false);
+    if(object==controlsWindow_ && event->type()==QEvent::Close && !closing_) {
+        static_cast<QCloseEvent*>(event)->ignore();QTimer::singleShot(0,this,[this]{reuniteView(true);});return true;
+    }
+    if(event->type()==QEvent::KeyPress || event->type()==QEvent::KeyRelease) {
+        auto* widget=qobject_cast<QWidget*>(object);
+        const bool ours=widget && (widget->window()==this || widget->window()==controlsWindow_);
+        auto* key=static_cast<QKeyEvent*>(event);
+        if(ours && key->key()==Qt::Key_R && (key->modifiers()==Qt::NoModifier || (originalHeld_ && event->type()==QEvent::KeyRelease))) {
+            const bool editing=qobject_cast<QLineEdit*>(widget) || qobject_cast<QAbstractSpinBox*>(widget);
+            if(!editing || originalHeld_) {
+                if(!key->isAutoRepeat())previewOriginal(event->type()==QEvent::KeyPress);
+                return true;
+            }
+        }
+    }
+    return QMainWindow::eventFilter(object,event);
+}
+void PlayerWindow::toggleSeparateView() {
+    if(controlsWindow_){reuniteView(false);return;}
+    const auto screens=QGuiApplication::screens();
+    if(screens.size()<2){status_->setText("当前只有一块显示器，保持单窗口播放");return;}
+    previewOriginal(false);if(isFullScreen())toggleFullscreen();
+    dockedGeometry_=saveGeometry();dockedMaximized_=isMaximized();
+    QScreen* source=screen();QScreen* target=nullptr;
+    for(auto* candidate:screens)if(candidate!=source && (!target || candidate->size().width()*candidate->devicePixelRatio()>target->size().width()*target->devicePixelRatio()))target=candidate;
+    if(!target)return;
+    displayScreen_=target;
+    controlsWindow_=new QMainWindow(this,Qt::Window);controlsWindow_->setObjectName("controlsWindow");controlsWindow_->setWindowTitle("映澈 · 播放控制");
+    auto* panel=new QWidget(controlsWindow_);auto* column=new QVBoxLayout(panel);column->setContentsMargins(0,0,0,0);column->setSpacing(0);
+    controlsWindow_->setCentralWidget(panel);
+    // Only ordinary widgets move. The single video widget and mpv context stay put.
+    menus_->setParent(controlsWindow_);controlsWindow_->setMenuBar(menus_);
+    column->addWidget(header_);side_->setMaximumWidth(QWIDGETSIZE_MAX);column->addWidget(side_,1);column->addWidget(footer_);
+    header_->show();side_->show();footer_->show();menus_->show();
+    for(auto* action:actions())controlsWindow_->addAction(action);
+    controlsWindow_->resize(qMin(1000,source->availableGeometry().width()),qMin(820,source->availableGeometry().height()));
+    controlsWindow_->move(source->availableGeometry().topLeft());controlsWindow_->show();
+    setMinimumSize(360,220);showNormal();windowHandle()->setScreen(target);setGeometry(target->geometry());showFullScreen();
+    status_->setText("画面已分离；F10 合并，关闭控制窗口会暂停并合并");
+}
+void PlayerWindow::reuniteView(bool pause) {
+    if(!controlsWindow_)return;
+    previewOriginal(false);if(pause)video_->property("pause","yes");
+    auto* old=controlsWindow_;controlsWindow_=nullptr;displayScreen_=nullptr;
+    showNormal();menus_->setParent(this);setMenuBar(menus_);
+    mainLayout_->insertWidget(0,header_);middle_->addWidget(side_);side_->setMaximumWidth(380);mainLayout_->addWidget(footer_);
+    header_->show();side_->show();footer_->show();menus_->show();middle_->setSizes({900,300});
+    old->hide();old->deleteLater();setMinimumSize(850,560);restoreGeometry(dockedGeometry_);
+    bool reachable=false;for(auto* s:QGuiApplication::screens())if(s->availableGeometry().intersects(frameGeometry()))reachable=true;
+    if(!reachable && QGuiApplication::primaryScreen())move(QGuiApplication::primaryScreen()->availableGeometry().topLeft());
+    if(dockedMaximized_)showMaximized();else showNormal();
+    video_->update();status_->setText(pause?"窗口已合并并暂停":"已恢复单窗口播放");
+}
 void PlayerWindow::loadSettings() {
-    QFile file((controlDir_.isEmpty()?QDir(root_).filePath("data/settings.json"):QDir(controlDir_).filePath("settings.json")));
-    if(!file.open(QIODevice::ReadOnly))return;
-    if(file.size()>1024*1024)return;
-    const auto doc=QJsonDocument::fromJson(file.readAll());if(!doc.isObject())return;
-    const auto obj=doc.object();if(obj.value("version").toInt()!=1)return;
-    beauty_=sanitizeBeauty(obj.value("beauty").toObject());positions_=obj.value("positions").toObject();
+    const QString path=settingsPath();
+    QFile file(QFileInfo::exists(path)?path:QDir(QFileInfo(path).absolutePath()).filePath("settings.json"));
+    if(!file.open(QIODevice::ReadOnly)) {
+        if(file.exists()){settingsWritable_=false;settingsNotice_="配置不可读取，本次不保存";}
+        return;
+    }
+    if(file.size()>4*1024*1024){settingsWritable_=false;settingsNotice_="配置过大，已保留原文件；本次不保存";return;}
+    const auto doc=QJsonDocument::fromJson(file.readAll());
+    if(!doc.isObject()){settingsWritable_=false;settingsNotice_="配置损坏，已保留原文件；本次不保存";return;}
+    const auto obj=doc.object();const int version=obj.value("version").toInt();
+    if(version==1) {
+        if(!obj.value("beauty").isObject()){settingsWritable_=false;settingsNotice_="旧配置结构损坏，已保留原文件；本次不保存";return;}
+        defaults_={{"beauty",sanitizeBeauty(obj.value("beauty").toObject())},{"enabled",true}};
+        settingsNotice_="已导入旧全局设置并限制到温和范围；旧配置保留";
+    } else if(version==2) {
+        bool valid=obj.value("defaults").isObject() && obj.value("defaults").toObject().value("beauty").isObject() && obj.value("media").isObject();
+        const auto records=obj.value("media").toObject();
+        for(auto it=records.constBegin();valid && it!=records.constEnd();++it)valid=it.value().isObject() && it.value().toObject().value("beauty").isObject();
+        if(!valid){settingsWritable_=false;settingsNotice_="配置结构损坏，已保留原文件；本次不保存";return;}
+        defaults_=obj.value("defaults").toObject();defaults_["beauty"]=sanitizeBeauty(defaults_.value("beauty").toObject());
+        mediaSettings_=obj.value("media").toObject();
+    } else {settingsWritable_=false;settingsNotice_="配置版本不支持，保留原文件；本次不保存";return;}
+    beauty_=sanitizeBeauty(defaults_.value("beauty").toObject());loadedEnabled_=defaults_.value("enabled").toBool(true);
+    positions_=obj.value("positions").toObject();
     lastDirectory_=obj.value("lastDirectory").toString();
 }
 void PlayerWindow::saveSettings() {
+    if(!settingsWritable_)return;
     while(positions_.size()>100)positions_.erase(positions_.begin());
-    QSaveFile file((controlDir_.isEmpty()?QDir(root_).filePath("data/settings.json"):QDir(controlDir_).filePath("settings.json")));
-    if(!file.open(QIODevice::WriteOnly)) {if(status_)status_->setText("设置保存失败：目录不可写");return;}
-    QJsonObject obj{{"version",1},{"beauty",beauty_},{"positions",positions_},{"lastDirectory",lastDirectory_}};
-    const auto bytes=QJsonDocument(obj).toJson();
-    if(file.write(bytes)!=bytes.size()||!file.commit())if(status_)status_->setText("设置保存失败");
+    QSaveFile file(settingsPath());
+    if(!file.open(QIODevice::WriteOnly)) {if(status_)status_->setText("设置保存失败：目录不可写");if(pictureStatus_)pictureStatus_->setText("画面参数尚未保存：目录不可写");return;}
+    QJsonObject obj{{"version",2},{"defaults",defaults_},{"media",mediaSettings_},{"positions",positions_},{"lastDirectory",lastDirectory_}};
+    const auto bytes=QJsonDocument(obj).toJson(QJsonDocument::Compact);
+    if(bytes.size()>4*1024*1024){if(pictureStatus_)pictureStatus_->setText("配置达到容量限制，当前调整未保存；原文件保留");return;}
+    if(file.write(bytes)!=bytes.size()||!file.commit()) {
+        if(status_)status_->setText("设置保存失败");if(pictureStatus_)pictureStatus_->setText("画面参数保存失败，本次调整尚未保存");
+    } else if(pictureStatus_ && pictureScope_->currentIndex()!=2) {
+        pictureStatus_->setText(pictureScope_->currentIndex()==1?"全局默认已保存":mediaKey_.isEmpty()?"尚未打开可识别的视频":mediaSettings_.contains(mediaKey_)?"单片设置已保存；改名、移动后仍可恢复":"此视频继承全局默认");
+    }
 }
-void PlayerWindow::closeEvent(QCloseEvent* e) {updatePlayback();saveSettings();setBridgeEnabled(false);video_->shutdown();e->accept();}
+void PlayerWindow::closeEvent(QCloseEvent* e) {
+    closing_=true;previewOriginal(false);updatePlayback();saveSettings();setBridgeEnabled(false);video_->shutdown();
+    if(controlsWindow_)controlsWindow_->hide();e->accept();
+}
 void PlayerWindow::dragEnterEvent(QDragEnterEvent* e) {if(e->mimeData()->hasUrls())e->acceptProposedAction();}
 void PlayerWindow::dropEvent(QDropEvent* e) {
     QStringList paths;for(const auto& u:e->mimeData()->urls())if(u.isLocalFile())paths.append(u.toLocalFile());
@@ -419,7 +572,15 @@ void PlayerWindow::testTick() {
                 else if(action=="pause")video_->property("pause",o.value("value").toBool()?"yes":"no");
                 else if(action=="speed")speed_->setValue(o.value("value").toDouble(1));
                 else if(action=="engine")video_->setBeautyEngine("gpupixel");
-                else if(action=="beauty")applyBeauty(o.value("values").toObject());
+                else if(action=="beauty") {applyBeauty(o.value("values").toObject());rememberPicture();saveDebounce_.start();}
+                else if(action=="scope")pictureScope_->setCurrentIndex(o.value("value").toInt());
+                else if(action=="reset-picture")resetPicture();
+                else if(action=="hold-original")previewOriginal(o.value("value").toBool());
+                else if(action=="separate")toggleSeparateView();
+                else if(action=="close-controls" && controlsWindow_)controlsWindow_->close();
+                else if(action=="screen-loss-contract")reuniteView(true);
+                else if(action=="resize")resize(o.value("width").toInt(1220),o.value("height").toInt(760));
+                else if(action=="test-stall")QThread::msleep(static_cast<unsigned long>(std::clamp(o.value("ms").toInt(),0,1000)));
                 else if(action=="enabled")beautyToggle_->setChecked(o.value("value").toBool());
                 else if(action=="compare")compareToggle_->setChecked(o.value("value").toBool());
                 else if(action=="swap-source") {sourceLabel_->setText(QFileInfo(o.value("path").toString()).fileName());video_->setSwapSource(o.value("path").toString());}
@@ -428,11 +589,16 @@ void PlayerWindow::testTick() {
                 else if(action=="fullscreen")toggleFullscreen();
                 else if(action=="snapshot")video_->saveFrame(o.value("path").toString());
                 else if(action=="windowshot")grab().save(o.value("path").toString());
+                else if(action=="controlshot" && controlsWindow_)controlsWindow_->grab().save(o.value("path").toString());
                 else if(action=="quit")close();
             }
         }
     }
     auto state=video_->diagnostics();state["commandId"]=static_cast<double>(testCommandId_);state["file"]=currentFile_;
+    state["mediaKey"]=mediaKey_;state["pictureScope"]=pictureScope_->currentIndex();state["pictureStatus"]=pictureStatus_->text();state["separated"]=controlsWindow_!=nullptr;
+    state["settingsWritable"]=settingsWritable_;state["analysisStatus"]=analysisLabel_->text();
+    state["displayDpr"]=devicePixelRatioF();state["displayScreen"]=screen()?screen()->name():QString();state["controlsScreen"]=controlsWindow_&&controlsWindow_->screen()?controlsWindow_->screen()->name():QString();
+    QJsonArray screens;for(auto* s:QGuiApplication::screens())screens.append(QJsonObject{{"name",s->name()},{"width",s->size().width()},{"height",s->size().height()},{"dpr",s->devicePixelRatio()},{"refreshHz",s->refreshRate()}});state["screens"]=screens;
     state["bridgeEnabled"]=bridgeToggle_->isChecked();state["bridgeStatus"]=bridgeLabel_->text();state["swapStatus"]=swapLabel_->text();state["fullscreen"]=isFullScreen();state["windowWidth"]=width();state["windowHeight"]=height();
     QSaveFile output(QDir(controlDir_).filePath("state.json"));
     if(output.open(QIODevice::WriteOnly)) {const auto bytes=QJsonDocument(state).toJson();if(output.write(bytes)==bytes.size())output.commit();}

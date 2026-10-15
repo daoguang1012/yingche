@@ -21,15 +21,16 @@ class FastFaceTracker:
             self.detector=mp.tasks.vision.FaceLandmarker.create_from_options(options)
             self.stamp=-1
         self.gray=None;self.states=[];self.ids=[];self.last_detect=-1e9;self.last_fallback=-1e9;self.last_time=None
-        self.mode='detect';self.flow_quality=0.
+        self.mode='detect';self.flow_quality=0.;self.flow_qualities=[]
 
     @staticmethod
     def center(points):return (points[234]+points[454])*.5
 
     def _flow(self,gray):
+        self.flow_qualities=[0.]*len(self.states)
         if self.gray is None or self.gray.shape!=gray.shape:return []
         h,w=gray.shape;results=[];qualities=[]
-        for state in self.states:
+        for index,state in enumerate(self.states):
             points=state['points'];old=np.ascontiguousarray((points[ANCHORS]*[w,h]).astype(np.float32).reshape(-1,1,2))
             new,ok,error=cv2.calcOpticalFlowPyrLK(self.gray,gray,old,None,winSize=(25,25),maxLevel=4,
                 criteria=(cv2.TERM_CRITERIA_EPS|cv2.TERM_CRITERIA_COUNT,20,.01))
@@ -47,6 +48,7 @@ class FastFaceTracker:
             moved=((points*[w,h])@mat[:,:2].T+mat[:,2])/[w,h]
             if not np.isfinite(moved).all() or np.linalg.norm(self.center(moved)-self.center(points))>.3:results.append(None);continue
             results.append(moved.astype(np.float32))
+            self.flow_qualities[index]=fraction*float(inliers.mean())
         self.flow_quality=min(qualities,default=0.)
         return results
 
@@ -108,6 +110,8 @@ class FastFaceTracker:
         motion=[]
         for state in states:
             index=state.pop('previous');state['id']=previous[index]['id'] if index is not None else self.next_id
+            state['flowQuality']=self.flow_qualities[index] if index is not None and index<len(self.flow_qualities) else None
+            state['confirmationAge']=max(0.,now-state['confirmed'])
             if index is None:self.next_id+=1
             velocity=np.zeros(2,np.float32)
             if index is not None and .003<=dt<=.12:

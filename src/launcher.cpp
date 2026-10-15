@@ -9,7 +9,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR arguments, int) {
     const std::wstring own(buffer.data(),size);
     const auto split=own.find_last_of(L"\\/");
     const std::wstring root=own.substr(0,split);
-    const std::wstring program=root+L"\\app\\BeautyPlayerV041.exe";
+    const std::wstring program=root+L"\\app\\BeautyPlayerV060.exe";
     std::wstring command=L"\""+program+L"\" "+arguments;
     STARTUPINFOW startup{}; startup.cb=sizeof(startup);
     PROCESS_INFORMATION process{};

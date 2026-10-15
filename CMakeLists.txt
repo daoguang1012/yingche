@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(BeautyPlayer VERSION 0.4.1 LANGUAGES CXX C)
+project(BeautyPlayer VERSION 0.6.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -19,8 +19,8 @@ qt_add_executable(BeautyPlayer WIN32 src/main.cpp src/player.cpp src/player.h sr
 target_include_directories(BeautyPlayer PRIVATE tools/mpv/include third_party/gpupixel/third_party/glad/include third_party/gpupixel/third_party/glfw/include)
 target_link_libraries(BeautyPlayer PRIVATE Qt6::Widgets Qt6::OpenGLWidgets Qt6::OpenGL gpupixel::gpupixel glad::glad opengl32)
 target_compile_options(BeautyPlayer PRIVATE /utf-8 /W4)
-set_target_properties(BeautyPlayer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/app" OUTPUT_NAME "BeautyPlayerV041")
+set_target_properties(BeautyPlayer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/app" OUTPUT_NAME "BeautyPlayerV060")
 
 add_executable(Yingche WIN32 src/launcher.cpp)
-set_target_properties(Yingche PROPERTIES AUTOMOC OFF AUTORCC OFF MSVC_RUNTIME_LIBRARY "MultiThreaded" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/work/v041" OUTPUT_NAME "Yingche")
+set_target_properties(Yingche PROPERTIES AUTOMOC OFF AUTORCC OFF MSVC_RUNTIME_LIBRARY "MultiThreaded" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/work/v060" OUTPUT_NAME "Yingche")
 target_compile_options(Yingche PRIVATE /utf-8 /W4)

@@ -1,0 +1,74 @@
+{
+  "version": "0.6.0",
+  "date": "2026-10-15",
+  "passed": true,
+  "cases": [
+    {
+      "version": "0.6.0",
+      "missingModelsCase": true,
+      "passed": true,
+      "checks": [
+        "packaged launcher and native 0.6.0 start from the isolated package",
+        "video clock advances",
+        "without face models the picture equals original and no automatic download occurs",
+        "normal exit cleans both owned engines"
+      ],
+      "status": "人脸引擎已停止 · 局部效果暂停"
+    },
+    {
+      "version": "0.6.0",
+      "missingModelsCase": false,
+      "passed": true,
+      "checks": [
+        "packaged launcher and native 0.6.0 start from the isolated package",
+        "video clock advances",
+        "installed tracking models enable actual native beauty pixels",
+        "packaged legacy bridge accepts an extension session and analyzes a real frame",
+        "both face engines run from the isolated package",
+        "dual-window separation and reunion work from the package",
+        "isolated per-media settings save",
+        "normal exit cleans both owned engines"
+      ],
+      "changedPixels": 31939,
+      "bridgeFaces": 1
+    }
+  ],
+  "downloadedAndVerifiedModels": [
+    {
+      "name": "face_landmarker.task",
+      "bytes": 3758596,
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+    },
+    {
+      "name": "face_detection_yunet_2023mar.onnx",
+      "bytes": 232589,
+      "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+      "url": "https://github.com/opencv/opencv_zoo/raw/refs/heads/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+    }
+  ],
+  "downloadConditions": "A direct TLS attempt failed with revocation-offline. Retrying through the existing loopback proxy succeeded with normal TLS validation. No certificate or hash checks disabled.",
+  "runtimeArtifacts": {
+    "Yingche.exe": {
+      "bytes": 119808,
+      "sha256": "aa36313f5c4868d910d2e8d76a5d21e554ddd81ba065f739a6cb43009bf41a53"
+    },
+    "app/BeautyPlayerV060.exe": {
+      "bytes": 320512,
+      "sha256": "ce8b04e2d0d2a96922e985c8b420987acf70a91a55248451e9de7b1480f8bff8"
+    },
+    "app/face_engine_v060/FaceEngine.exe": {
+      "bytes": 18412918,
+      "sha256": "e1ecdd7972270d8bb11cdc99922cf8418959bcc6383b3740cb090db7b1cbe7ca"
+    },
+    "app/face_engine_v041/FaceEngine.exe": {
+      "bytes": 18407171,
+      "sha256": "98af30b16476dcea6599a709e725f46ee66d1e90f69b8bd3a2b75bb81909c84d"
+    }
+  },
+  "limitations": [
+    "Package checks do not certify subjective appearance, physical monitor unplug, HDR, real high-motion 60fps or NVIDIA VSR driver activation.",
+    "The full swap model set was not downloaded again. Swap remains experimental and off by default.",
+    "The package is tested with fresh isolated settings and public Intel CC BY footage, without changing a daily browser profile."
+  ]
+}

@@ -1,4 +1,4 @@
 Yingche (映澈), Copyright (c) 2026 Yingche contributors.
 Project-authored and integrated code: AGPL-3.0.
 Upstream sources retain their copyright and licenses; see THIRD_PARTY.md and licenses/.
-Application model weights are not part of this public distribution.
+Native face model weights are not bundled. Edge Framegen weights retain their separate personal/non-commercial license in edge-extension/vendor/framegen/WEIGHTS_LICENSE.md.

@@ -21,7 +21,7 @@ def write(obj):
     sys.stdout.write(json.dumps(obj, separators=(',', ':')) + '\n')
     sys.stdout.flush()
 
-def analyze(image, detector, previous, reset, locator=None, provided=None, landmarks_only=False):
+def analyze(image, detector, previous, reset, locator=None, provided=None, landmarks_only=False, stability=None, states=None, now=0., paused=False):
     h, w = image.shape[:2]
     if provided is not None:
         landmarks = provided
@@ -74,11 +74,12 @@ def analyze(image, detector, previous, reset, locator=None, provided=None, landm
     # Landmarks stay at full analysis resolution; soft colour masks need fewer pixels.
     mask_scale=min(1.,512/max(w,h));w,h=max(2,round(w*mask_scale)),max(2,round(h*mask_scale))
     mask = np.zeros((h, w, 3), np.uint8)
+    ycc=cv2.cvtColor(cv2.resize(image,(w,h)),cv2.COLOR_RGB2YCrCb) if stability is not None else None
     packed = []
     def poly(channel, pts, ids, color):
         points = np.rint(pts[ids] * [w, h]).astype(np.int32)
         cv2.fillPoly(channel, [points], color, lineType=cv2.LINE_AA)
-    for pts in faces[:4]:
+    for index,pts in enumerate(faces[:4]):
         skin = np.zeros((h,w),np.uint8)
         lip = np.zeros_like(skin)
         cheek = np.zeros_like(skin)
@@ -99,6 +100,8 @@ def analyze(image, detector, previous, reset, locator=None, provided=None, landm
         skin = cv2.GaussianBlur(skin,(0,0),sigma)
         lip = cv2.GaussianBlur(lip,(0,0),max(.6,sigma*.35))
         cheek = cv2.GaussianBlur(cheek,(0,0),sigma*1.5)
+        if stability is not None:
+            skin,lip,cheek,_=stability.refine(ycc,pts,skin,lip,cheek,states[index],now,paused)
         mask[:,:,0] = np.maximum(mask[:,:,0],skin)
         mask[:,:,1] = np.maximum(mask[:,:,1],lip)
         mask[:,:,2] = np.maximum(mask[:,:,2],cheek)
@@ -133,6 +136,8 @@ class FaceProcessor:
         from face_tracking import FastFaceTracker
         self.tracker=FastFaceTracker(self.model.read_bytes(),lambda image:analyze(image,self.detector,[],True,self.locator,landmarks_only=True))
         self.previous=[];self.generation=-1;self.last_thumb=None;self.swapper=None;self.swap_async=None;self.source_ready=False
+        from beauty_stability import BeautyStability
+        self.stability=BeautyStability()
 
     def set_source(self, image):
         self.source_ready=False
@@ -167,11 +172,18 @@ class FaceProcessor:
         stream_generation=(req.get('streamId','native'),generation)
         sample_time=float(req.get('sampleTime',time.monotonic()*1000))/1000.
         reset=stream_generation!=self.generation or cut
+        if reset:self.stability.reset()
         if reset and self.swap_async:self.swap_async.reset()
         self.previous,motion=self.tracker.update(image,sample_time,reset)
-        points,mask,self.previous=analyze(image,self.detector,[],True,provided=self.previous)
+        stable=bool(req.get('stableBeauty'))
+        points,mask,self.previous=analyze(image,self.detector,[],True,provided=self.previous,
+            stability=self.stability if stable else None,states=self.tracker.states,now=sample_time,paused=req.get('paused',False))
+        self.stability.retain(self.tracker.ids)
         self.generation=stream_generation;self.last_thumb=thumb
         result={'id':req.get('id',0),'generation':generation,'pts':req.get('pts',0),'faces':points,'mask':mask,'motion':motion,'sampleTime':req.get('sampleTime',0),'trackingMode':self.tracker.mode,'flowQuality':round(self.tracker.flow_quality,3),'trackIds':self.tracker.ids}
+        result['sceneCut']=bool(cut)
+        result['faceSignals']=[{'flowQuality':s.get('flowQuality'),'confirmationAgeMs':round(s['confirmationAge']*1000,1)} for s in self.tracker.states]
+        result['effectWeights']=[self.stability.history.get(s['id'],{}).get('strength',0.) for s in self.tracker.states] if stable else [1.]*len(points)
         if req.get('swapEnabled') and self.source_ready:
             self.swap_async.submit(image,self.previous,self.tracker.ids,req)
             rgba,info=self.swap_async.compose(image,self.previous,self.tracker.ids,req,OVAL)

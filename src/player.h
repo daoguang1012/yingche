@@ -14,6 +14,10 @@
 #include <QCloseEvent>
 #include <QDropEvent>
 #include <QComboBox>
+#include <QSplitter>
+#include <QVBoxLayout>
+#include <QPointer>
+#include <QScreen>
 
 class SeekSlider final: public QSlider {
     Q_OBJECT
@@ -37,6 +41,7 @@ protected:
     void closeEvent(QCloseEvent*) override;
     void dragEnterEvent(QDragEnterEvent*) override;
     void dropEvent(QDropEvent*) override;
+    bool eventFilter(QObject*,QEvent*) override;
 private:
     void buildUi();
     void buildMenus();
@@ -47,6 +52,13 @@ private:
     void saveSettings();
     void loadSettings();
     void applyBeauty(const QJsonObject&);
+    void rememberPicture();
+    void restorePicture(int scope);
+    void resetPicture();
+    QString settingsPath() const;
+    void toggleSeparateView();
+    void reuniteView(bool pause);
+    void previewOriginal(bool value);
     void toggleFullscreen();
     void openDialog();
     void jumpDialog();
@@ -73,6 +85,19 @@ private:
     QProcess* bridge_=nullptr;
     QByteArray bridgeOutput_;
     QJsonObject beauty_=defaultBeauty(),positions_;
+    QJsonObject defaults_{{"beauty",defaultBeauty()},{"enabled",true}},mediaSettings_;
+    QString mediaKey_,settingsNotice_;
+    bool loadedEnabled_=true,settingsWritable_=true,closing_=false,originalHeld_=false;
+    QComboBox* pictureScope_=nullptr;
+    QLabel* pictureStatus_=nullptr;
+    QPushButton* holdOriginal_=nullptr;
+    QMainWindow* controlsWindow_=nullptr;
+    QPointer<QScreen> displayScreen_;
+    QSplitter* middle_=nullptr;
+    QVBoxLayout* mainLayout_=nullptr;
+    QMenuBar* menus_=nullptr;
+    QByteArray dockedGeometry_;
+    bool dockedMaximized_=false;
     QTimer tick_,seekDebounce_,saveDebounce_,testTimer_;
     bool applying_=false,wasMaximized_=false,sideBeforeFull_=true;
     qint64 testCommandId_=-1;
