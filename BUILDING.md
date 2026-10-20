@@ -14,7 +14,9 @@ Tests are in tests/. Fixture URLs/provenance are in THIRD_PARTY.md and validatio
 
 Unused Mars/MNN binary directories are intentionally omitted; the root build disables the GPUPixel face detector. The Python worker requirements are in requirements-face.txt. Model download and verification are separate from application startup.
 
-0.6.0 native output: app/BeautyPlayerV060.exe. Launcher output: work/v060/Yingche.exe; copy it to the root after checks. tools/beauty_stability.py is imported by the worker and included by PyInstaller.
+0.6.0 native output: app/BeautyPlayerV060.exe. Launcher output: work/v060/Yingche.exe; copy it to the root after checks.
+
+Background service: the same CMake configure also builds app/YingcheBridge.exe (needs Qt Widgets and Network only) and work/v060/YingcheService.exe; copy the launcher to the root. `cmake --build build --target YingcheBridge YingcheService` builds just these. tests/edge_popup_service_v060.py checks the popup connection indicator against the real bridge_server.py with a stub processor on a separate port. tools/beauty_stability.py is imported by the worker and included by PyInstaller.
 
 The unchanged browser bridge still runs app/face_engine_v041/FaceEngine.exe with protocol 0.4.1. Its exact Python source and portable build spec are retained under legacy/bridge-v041. Build that spec separately and copy the resulting FaceEngine directory to app/face_engine_v041. Do not rebuild the legacy bridge from the new native worker source.
 
@@ -24,4 +26,4 @@ Browser interpolation uses the included Framegen 1.4.0 runtime and unchanged v7-
 
 The portable distribution includes both frozen workers, runtime DLLs, source, licenses and an opt-in native model downloader. It excludes personal configuration, test media, development tools and native model weights. Keep future source synchronization separate from Release approval as described in AGENTS.md.
 
-Packaging: run `python scripts/package_release.py stage --runtime-root PATH_TO_VERIFIED_INSTALL --stage dist/Yingche-v0.6.0-windows-x64` from the Git checkout, then test an isolated copy with `tests/package_acceptance_v060.py`. Run `python scripts/package_release.py archive --stage dist/Yingche-v0.6.0-windows-x64 --assets dist/assets` after reviewing the staged files. Staging requires a new directory and preserves existing outputs; the packager never uploads or publishes a Release.
+Packaging: run `python scripts/package_release.py stage --runtime-root PATH_TO_VERIFIED_INSTALL --stage dist/Yingche-v0.6.0-windows-x64` from the Git checkout, then test an isolated copy with `tests/package_acceptance_v060.py`. Run `python scripts/package_release.py archive --stage dist/Yingche-v0.6.0-windows-x64 --assets dist/assets` after reviewing the staged files. Staging requires a new directory and preserves existing outputs; the packager never uploads or publishes a Release. Full staging now also requires YingcheService.exe and app/YingcheBridge.exe in the runtime root. For the player-free package, use `stage-service` and then `archive-service` with the same arguments: it keeps the source snapshot, extension, model downloader, Qt Widgets/Network runtime and face_engine_v041, and omits the player, mpv, GPUPixel and face_engine_v060. Checksums in the assets folder cover every archive there.

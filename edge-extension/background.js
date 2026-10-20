@@ -1,6 +1,6 @@
 const EXTENSION_VERSION='0.6.0';
 const BASE='http://127.0.0.1:18766';
-function requireCurrentBridge(data){if(data.version!=='0.4.1')throw Error('请打开映澈并重新启用 Edge 连接（需要 0.4.1 桥接协议）');return data;}
+function requireCurrentBridge(data){if(data.version!=='0.4.1')throw Error('本地引擎版本不符：请运行映澈后台服务，或在播放器重新启用 Edge 连接（需要 0.4.1 桥接协议）');return data;}
 const DEFAULT={interpolation:false,vsrCompatible:true,enabled:true,compare:false,swapEnabled:false,swapTarget:'largest',swapStrength:100,swapFeather:35,beauty:{smooth:35,detail:70,white:15,warm:0,pink:8,slim:0,eyes:0,chin:0,nose:0,lip:0,blush:0,sharp:10}};
 const RANGES={smooth:[0,200],detail:[0,150],white:[-100,200],warm:[-100,100],pink:[0,150],slim:[-100,150],eyes:[-100,150],chin:[-100,100],nose:[-100,100],lip:[0,150],blush:[0,150],sharp:[0,150]};
 let token=null,connecting=null;
@@ -19,7 +19,7 @@ async function config(){
 async function call(path,payload,retry=true){
  if(path!='/session'&&!token){if(!connecting)connecting=call('/session',{},false).then(r=>{requireCurrentBridge(r);token=r.token;return r;}).finally(()=>{connecting=null;});await connecting;}
  let response;
- try{response=await fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Yingche-Extension':chrome.runtime.id,...(token?{'Authorization':'Bearer '+token}:{})},body:JSON.stringify(payload),signal:AbortSignal.timeout(path==='/source'?60000:8000),cache:'no-store'});}catch(e){throw Error('本地连接不可用，请先在播放器「换脸」页启用 Edge 连接');}
+ try{response=await fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Yingche-Extension':chrome.runtime.id,...(token?{'Authorization':'Bearer '+token}:{})},body:JSON.stringify(payload),signal:AbortSignal.timeout(path==='/source'?60000:8000),cache:'no-store'});}catch(e){throw Error('未检测到本地引擎：请运行映澈后台服务 YingcheService.exe，或在播放器「换脸」页启用 Edge 连接');}
  const value=await response.json();if(response.status===401&&retry){token=null;return call(path,payload,false);}if(!response.ok)throw Error(value.error||'本地处理失败');return value;
 }
 async function run(message,sender){

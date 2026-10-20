@@ -10,6 +10,7 @@
 /tools/emsdk/
 /tools/chromium*/
 /Yingche.exe
+/YingcheService.exe
 __pycache__/
 *.pyc
 .env

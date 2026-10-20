@@ -251,7 +251,7 @@ void PlayerWindow::setBridgeEnabled(bool enabled) {
         connect(bridge_,&QProcess::readyReadStandardError,this,[this]{bridge_->readAllStandardError();});
         connect(bridge_,&QProcess::errorOccurred,this,[this](QProcess::ProcessError){bridgeLabel_->setText("Edge 服务启动失败，请检查运行库");});
         connect(bridge_,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[this](int,QProcess::ExitStatus){
-            if(bridgeToggle_->isChecked()){QSignalBlocker block(bridgeToggle_);bridgeToggle_->setChecked(false);bridgeLabel_->setText("Edge 服务已停止；端口可能被其他实例占用");}
+            if(bridgeToggle_->isChecked()){QSignalBlocker block(bridgeToggle_);bridgeToggle_->setChecked(false);bridgeLabel_->setText("Edge 服务已停止；端口可能被映澈后台服务或其他实例占用");}
         });
     }
     if(bridge_->state()!=QProcess::NotRunning)return;

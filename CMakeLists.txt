@@ -3,7 +3,7 @@ project(BeautyPlayer VERSION 0.6.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets OpenGL)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets OpenGL Network)
 set(GPUPIXEL_BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 set(GPUPIXEL_ENABLE_FACE_DETECTOR OFF CACHE BOOL "" FORCE)
 set(GPUPIXEL_BUILD_DESKTOP_DEMO OFF CACHE BOOL "" FORCE)
@@ -24,3 +24,14 @@ set_target_properties(BeautyPlayer PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_
 add_executable(Yingche WIN32 src/launcher.cpp)
 set_target_properties(Yingche PROPERTIES AUTOMOC OFF AUTORCC OFF MSVC_RUNTIME_LIBRARY "MultiThreaded" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/work/v060" OUTPUT_NAME "Yingche")
 target_compile_options(Yingche PRIVATE /utf-8 /W4)
+
+# Player-free background service for the browser extension: tray app plus its root launcher.
+qt_add_executable(YingcheBridge WIN32 src/bridge_service.cpp)
+target_link_libraries(YingcheBridge PRIVATE Qt6::Widgets Qt6::Network)
+target_compile_options(YingcheBridge PRIVATE /utf-8 /W4)
+set_target_properties(YingcheBridge PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/app")
+
+add_executable(YingcheService WIN32 src/launcher.cpp)
+target_compile_definitions(YingcheService PRIVATE YINGCHE_SERVICE_LAUNCHER)
+set_target_properties(YingcheService PROPERTIES AUTOMOC OFF AUTORCC OFF MSVC_RUNTIME_LIBRARY "MultiThreaded" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/work/v060" OUTPUT_NAME "YingcheService")
+target_compile_options(YingcheService PRIVATE /utf-8 /W4)

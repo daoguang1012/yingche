@@ -1,14 +1,20 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="popup.css"><title>映澈 · 网页增强</title></head><body>
-<header><div><h1>映澈</h1><span>0.6.0 · 换脸与补帧默认关闭</span></div><button id="connect">连接检测</button></header>
-<p id="message" role="status">请先在播放器「换脸」页开启 Edge 连接。</p>
-<button id="reloadExtension" hidden>重新加载扩展</button>
-<div class="actions"><button id="enable" class="accent">启用当前视频</button><button id="stop">停止增强</button></div><p id="videoState" class="muted">只处理你主动启用的页面</p>
-<div class="checks"><label><input type="checkbox" id="enabled">人像美颜</label><label><input type="checkbox" id="compare">左侧原画对比</label></div>
-<label class="block"><input type="checkbox" id="vsrCompatible">RTX VSR 兼容（实验）</label><p class="muted">保留原视频分辨率供显卡超分，会增加少量显示延迟。是否激活以 NVIDIA App 为准；卡顿时可关闭。</p>
-<label class="block"><input type="checkbox" id="interpolation">AI 补帧至 60 FPS（实验）</label><p id="interpolationState" class="muted" role="status">等待启用</p><p class="muted">默认关闭，需主动启用。果冻变形仍可能出现；现有切镜检测仅是启发式回退，不保证所有切镜。在本机生成中间帧，需新版 Edge、WebGPU 和足够显卡性能。通常增加约一帧显示延迟，声音沿用原网页；快速运动可能出现变形。</p>
-<div class="presets"><button data-preset="natural">自然</button><button data-preset="clear">通透</button><button data-preset="strong">明显</button></div>
-<details><summary>美颜参数 · 宽范围</summary><div id="parameters"></div></details>
-<section><h2>实验功能 · 照片换脸</h2><label class="file-button">选择源照片<input id="sourceFile" type="file" accept="image/jpeg,image/png,image/webp,image/bmp"></label><span id="sourceName" class="muted">推荐单人清晰正面照</span>
-<label class="block"><input type="checkbox" id="swapEnabled">启用换脸</label><label class="line">替换目标<select id="swapTarget"><option value="largest">最大人脸</option><option value="all">全部人脸</option><option value="0">从左第 1 张</option><option value="1">从左第 2 张</option><option value="2">从左第 3 张</option><option value="3">从左第 4 张</option></select></label>
-<label class="line">融合强度<input id="swapStrength" type="number" min="0" max="100" value="100"></label><label class="line">边缘柔和<input id="swapFeather" type="number" min="0" max="100" value="35"></label><button id="clearSource">清除源照片</button></section>
-<footer>关闭增强会恢复原播放器。遇到跨域视频，可在页面浮窗中使用兼容捕获。受保护视频暂不支持。</footer><script src="popup.js"></script></body></html>
+<header class="top"><div class="brand"><span class="mark" aria-hidden="true"></span><div><h1>映澈</h1><span>网页视频美颜 · 0.6.0</span></div></div><button id="connect" class="link" data-state="checking" title="检测本地引擎"><i></i><span>检测中</span></button></header>
+<p id="message" role="status">请先运行映澈后台服务，或在播放器开启 Edge 连接。</p>
+<button id="reloadExtension" class="wide" hidden>重新加载扩展</button>
+<section class="card"><h2>当前页面</h2><p id="videoState" class="muted page-state">只处理你主动启用的页面</p><div class="actions"><button id="enable" class="accent">启用当前视频</button><button id="stop">停止增强</button></div></section>
+<section class="card"><label class="row"><span><b>人像美颜</b><small>磨皮、提亮与五官微调</small></span><input type="checkbox" id="enabled" class="switch"></label>
+<div class="presets" role="group" aria-label="美颜预设"><button data-preset="natural">自然</button><button data-preset="clear">通透</button><button data-preset="strong">明显</button></div>
+<details class="fine"><summary>精细参数</summary><div id="parameters"></div></details>
+<label class="row"><span><b>左侧原画对比</b><small>画面左半显示原片</small></span><input type="checkbox" id="compare" class="switch"></label>
+<label class="row"><span><b>RTX VSR 兼容 <em>实验</em></b><small>保留原分辨率供显卡超分，增加少量延迟；是否激活以 NVIDIA App 为准</small></span><input type="checkbox" id="vsrCompatible" class="switch"></label></section>
+<section class="card"><div class="card-head"><h2>实验功能</h2><span class="muted">默认关闭</span></div>
+<label class="row"><span><b>AI 补帧至 60 FPS</b><small id="interpolationState" role="status">等待启用</small></span><input type="checkbox" id="interpolation" class="switch"></label>
+<details class="note"><summary>补帧说明</summary><p>需主动启用。果冻变形仍可能出现；现有切镜检测仅是启发式回退，不保证所有切镜。在本机生成中间帧，需新版 Edge、WebGPU 和足够显卡性能。通常增加约一帧显示延迟，声音沿用原网页；快速运动可能出现变形。</p></details>
+<div class="divider"></div>
+<div class="source"><label class="file-button">选择源照片<input id="sourceFile" type="file" accept="image/jpeg,image/png,image/webp,image/bmp"></label><span id="sourceName" class="muted">推荐单人清晰正面照</span></div>
+<label class="row"><span><b>启用换脸</b><small>源照片只在本机处理</small></span><input type="checkbox" id="swapEnabled" class="switch"></label>
+<label class="line">替换目标<select id="swapTarget"><option value="largest">最大人脸</option><option value="all">全部人脸</option><option value="0">从左第 1 张</option><option value="1">从左第 2 张</option><option value="2">从左第 3 张</option><option value="3">从左第 4 张</option></select></label>
+<div class="pair"><label class="line">融合强度<input id="swapStrength" type="number" min="0" max="100" value="100"></label><label class="line">边缘柔和<input id="swapFeather" type="number" min="0" max="100" value="35"></label></div>
+<button id="clearSource" class="wide ghost">清除源照片</button></section>
+<footer>关闭增强会恢复原播放器。跨域视频可在页面浮窗中使用兼容捕获；受保护视频暂不支持。</footer><script src="popup.js"></script></body></html>
