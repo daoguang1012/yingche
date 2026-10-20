@@ -28,11 +28,13 @@ VideoWidget::VideoWidget(const QString& root,QWidget* parent):QOpenGLWidget(pare
         }
     });
     transitionTimer_.start();
+    syncWake_.setSingleShot(true);syncWake_.setTimerType(Qt::PreciseTimer);
+    connect(&syncWake_,&QTimer::timeout,this,[this]{update();});
 }
 VideoWidget::~VideoWidget() { shutdown(); }
 void VideoWidget::shutdown() {
     if(stopping_) return;
-    stopping_=true; analysisTimer_.stop();transitionTimer_.stop();
+    stopping_=true; analysisTimer_.stop();transitionTimer_.stop();syncWake_.stop();
     if(worker_) {
         disconnect(worker_,nullptr,this,nullptr);
         worker_->closeWriteChannel();
@@ -49,7 +51,8 @@ void VideoWidget::shutdown() {
             api_.render_context_free(context_); context_=nullptr;
         }
         gpupixel_.release(); gpupixelReady_=false;
-        frame_.reset(); analysis_.reset(); composite_.reset();cutSample_.reset(); shader_.reset();
+        slots_.clear(); newestSlot_=-1; shownSlot_=-1; analysis_.reset(); composite_.reset();cutSample_.reset(); shader_.reset();
+        for(auto& r:results_){if(r.maskTexture)glDeleteTextures(1,&r.maskTexture);if(r.swapTexture)glDeleteTextures(1,&r.swapTexture);}
         if(maskTexture_) glDeleteTextures(1,&maskTexture_);
         if(swapTexture_) glDeleteTextures(1,&swapTexture_);
         if(vao_) glDeleteVertexArrays(1,&vao_);
@@ -64,7 +67,9 @@ void VideoWidget::initializeGL() {
     glFunctionsReady_=true;
     glGenVertexArrays(1,&vao_);
     glGenTextures(1,&maskTexture_); glGenTextures(1,&swapTexture_);
-    for(GLuint texture:{maskTexture_,swapTexture_}) {
+    std::vector<GLuint> textures{maskTexture_,swapTexture_};
+    for(auto& r:results_){glGenTextures(1,&r.maskTexture);glGenTextures(1,&r.swapTexture);textures.push_back(r.maskTexture);textures.push_back(r.swapTexture);}
+    for(GLuint texture:textures) {
         glBindTexture(GL_TEXTURE_2D,texture);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
@@ -157,26 +162,42 @@ void VideoWidget::paintGL() {
     renderSize.scale(2560,1440,Qt::KeepAspectRatio);
     if(renderSize.width()>vw) renderSize=QSize(vw,vh);
     bool resized=false;
-    if(!frame_||frame_->size()!=renderSize) {
-        QOpenGLFramebufferObjectFormat fmt; fmt.setInternalTextureFormat(GL_RGBA8);
-        frame_=std::make_unique<QOpenGLFramebufferObject>(renderSize,fmt);
-        if(!frame_->isValid()) { glError_="无法分配视频画面缓冲"; emit errorOccurred(glError_); return; }
-        resized=true;
-    }
+    if(!slots_.empty() && slots_.front().fbo && slots_.front().fbo->size()!=renderSize) {slots_.clear();newestSlot_=-1;shownSlot_=-1;}
+    if(newestSlot_<0) resized=true;
+    const double now=clock_.elapsed();
+    const bool playing=text("pause")!="yes";
     if(needFrame_||resized) {
+        // Reuse the oldest slot no longer needed for delayed display; grow the ring only when necessary.
+        int target=-1;
+        for(int i=0;i<static_cast<int>(slots_.size());++i)
+            if(i!=newestSlot_ && i!=shownSlot_ && (slots_[i].epoch!=frameEpoch_ || slots_[i].at<now-syncDelayMs_-120.) && (target<0||slots_[i].at<slots_[target].at)) target=i;
+        if(target<0 && slots_.size()<24) {
+            QOpenGLFramebufferObjectFormat fmt; fmt.setInternalTextureFormat(GL_RGBA8);
+            FrameSlot slot;slot.fbo=std::make_unique<QOpenGLFramebufferObject>(renderSize,fmt);
+            if(!slot.fbo->isValid()) { glError_="无法分配视频画面缓冲"; emit errorOccurred(glError_); return; }
+            slots_.push_back(std::move(slot));target=static_cast<int>(slots_.size())-1;
+        }
+        if(target<0) for(int i=0;i<static_cast<int>(slots_.size());++i) if(i!=newestSlot_ && i!=shownSlot_ && (target<0||slots_[i].at<slots_[target].at)) target=i;
+        auto& slot=slots_[target];
         resetGLBoundary();
         api_.render_context_update(context_);
-        mpv_opengl_fbo fbo{static_cast<int>(frame_->handle()),renderSize.width(),renderSize.height(),GL_RGBA8};
+        mpv_opengl_fbo fbo{static_cast<int>(slot.fbo->handle()),renderSize.width(),renderSize.height(),GL_RGBA8};
         int flip=1,block=0;
         mpv_render_param params[]={{MPV_RENDER_PARAM_OPENGL_FBO,&fbo},
             {MPV_RENDER_PARAM_FLIP_Y,&flip},{MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME,&block},
             {MPV_RENDER_PARAM_INVALID,nullptr}};
         api_.render_context_render(context_,params);
         needFrame_=false; ++rendered_;
+        // Never call blocking mpv API from the render thread (the core may be waiting on it, e.g. at
+        // end of file); draining the client event queue is non-blocking and refreshes time-pos.
+        pollEvents();
+        const double pts=number("time-pos");
+        slot.pts=pts;slot.at=now;slot.id=rendered_;slot.epoch=frameEpoch_;newestSlot_=target;
+        QOpenGLFramebufferObject* newest=slot.fbo.get();
         if(beautyEnabled_||swapEnabled_) {
             QElapsedTimer cutClock;cutClock.start();
             if(!cutSample_)cutSample_=std::make_unique<QOpenGLFramebufferObject>(QSize(32,18));
-            QOpenGLFramebufferObject::blitFramebuffer(cutSample_.get(),QRect(0,0,32,18),frame_.get(),QRect(QPoint(),frame_->size()),GL_COLOR_BUFFER_BIT,GL_LINEAR);
+            QOpenGLFramebufferObject::blitFramebuffer(cutSample_.get(),QRect(0,0,32,18),newest,QRect(QPoint(),newest->size()),GL_COLOR_BUFFER_BIT,GL_LINEAR);
             const QImage sample=cutSample_->toImage().convertToFormat(QImage::Format_RGB32);
             const double ms=cutClock.nsecsElapsed()/1000000.;cutReadbackMs_+=ms;cutReadbackMaxMs_=(std::max)(cutReadbackMaxMs_,ms);++cutReadbackSamples_;
             if(!previousCutSample_.isNull() && sample.size()==previousCutSample_.size()) {
@@ -186,29 +207,94 @@ void VideoWidget::paintGL() {
                     const double delta=(std::abs(qRed(a)-qRed(b))+std::abs(qGreen(a)-qGreen(b))+std::abs(qBlue(a)-qBlue(b)))/3.;
                     sum+=delta;if(delta>32.)++changed;
                 }
-                if(sum/576.>35. && changed>288) {invalidateFaces();++cuts_;}
+                // Only a candidate: fast motion also passes this test. It becomes the cut position once
+                // the worker's motion-compensated check confirms a cut at the next result.
+                if(sum/576.>35. && changed>288) {cutCandidates_.push_back(now);if(cutCandidates_.size()>16)cutCandidates_.pop_front();}
             }
             previousCutSample_=sample;
         }
     }
-    const double age=std::abs(number("time-pos")-resultPts_);
-    const double maxAge=.20*(std::max)(1.,number("speed",1.));
-    const bool valid=resultGeneration_==generation_ && age<=maxAge && workerReady_;
-    const double wallAge=text("pause")=="yes" && age<.04 ? 0. : std::max(0.,clock_.elapsed()-resultSampleTime_);
-    const float trackingWeight=valid?static_cast<float>(std::clamp((200.-wallAge)/80.,0.,1.)):0.f;
-    trackingWeight_=trackingWeight;
-    auto predicted=points_;
-    std::array<QVector2D,4> offsets{};
-    const float ahead=text("pause")=="yes"?0.f:static_cast<float>(std::min(wallAge/1000.,.060));
-    if(valid)for(int i=0;i<faceCount_;++i) {
-        offsets[i]=velocities_[i]*ahead;
-        const float bound=(points_[i*8+2]-points_[i*8+3]).length()*.25f;
-        if(offsets[i].length()>bound && bound>0.f)offsets[i]=offsets[i].normalized()*bound;
-        for(int j=0;j<8;++j)predicted[i*8+j]+=offsets[i];
+    if(newestSlot_<0) return;
+    // Show the frame rendered syncDelayMs_ ago while playing with effects; otherwise the newest one.
+    // The audio delay depends only on whether effects are on, not on pause, so resuming playback
+    // never shifts the audio; the delay itself is only retuned while paused.
+    const bool syncWanted=syncDisplay_&&(beautyEnabled_||swapEnabled_)&&workerReady_;
+    if(!playing&&std::abs(delayTargetMs_-syncDelayMs_)>=30.)syncDelayMs_=delayTargetMs_;
+    syncActive_=syncWanted&&playing&&!awaitingPlayback_;
+    applyAudioDelay(syncWanted?syncDelayMs_:0.);
+    int show=newestSlot_;
+    if(syncActive_) {
+        const double due=now-syncDelayMs_;int oldest=-1;show=-1;
+        for(int i=0;i<static_cast<int>(slots_.size());++i) {
+            const auto& s=slots_[i];if(s.epoch!=frameEpoch_)continue;
+            if(s.at<=due && (show<0||s.at>slots_[show].at))show=i;
+            if(oldest<0||s.at<slots_[oldest].at)oldest=i;
+        }
+        if(show<0)show=oldest>=0?oldest:newestSlot_;
     }
+    shownSlot_=show;
+    QOpenGLFramebufferObject* shown=slots_[show].fbo.get();
+    const double t=slots_[show].at;displayPts_=slots_[show].pts;displayLagMs_=now-t;
+    // Bracketing analyses for the shown frame, never across a detected cut.
+    const Result *A=nullptr,*B=nullptr;
+    for(const auto& r:results_) {
+        if(r.generation!=generation_||r.faceCount<0)continue;
+        if(r.at<=t) {if(cutAt_>r.at && cutAt_<=t)continue;if(!A||r.at>A->at)A=&r;}
+        else {if(cutAt_>t && cutAt_<=r.at)continue;if(!B||r.at<B->at)B=&r;}
+    }
+    // Too short a delay shows frames before any later measurement exists. Grow only when that is
+    // measurably happening (one audio resync); shrinking waits for a pause, where it is inaudible.
+    // Right after play or seek no frame can have a later measurement yet; that is not a shortfall.
+    if(!syncActive_){playingSince_=now;bracketed_.clear();}
+    if(syncActive_&&now-playingSince_>1000.+syncDelayMs_&&slots_[show].id!=lastShownId_&&(A||B)) {
+        lastShownId_=slots_[show].id;bracketed_.push_back(A&&B);if(bracketed_.size()>60)bracketed_.pop_front();
+        const auto misses=std::count(bracketed_.begin(),bracketed_.end(),false);
+        if(bracketed_.size()>=30&&misses>static_cast<long long>(bracketed_.size()*.15)&&delayTargetMs_>syncDelayMs_+15.){syncDelayMs_=delayTargetMs_;bracketed_.clear();}
+    }
+    const Result* R=B&&(!A||B->at-t<t-A->at)?B:A;
+    const Result* other=R==A?B:A;
+    const double speed=(std::max)(1.,number("speed",1.));
+    const bool valid=R&&workerReady_&&std::abs(displayPts_-R->pts)<=.20*speed;
+    double gap=0.;
+    if(valid&&!(A&&B))gap=std::abs(t-R->at);
+    if(!playing&&valid&&std::abs(displayPts_-R->pts)<.04)gap=0.;
+    const float trackingWeight=valid?static_cast<float>(std::clamp((200.-gap)/80.,0.,1.)):0.f;
+    trackingWeight_=trackingWeight;
+    std::array<QVector2D,32> predicted{};
+    std::array<QVector2D,4> offsets{};
+    const int faces=valid?R->faceCount:0;
+    for(int i=0;i<faces;++i) {
+        const QVector2D center=(R->points[i*8+2]+R->points[i*8+3])*.5f;
+        int j=-1;
+        if(A&&B&&other)for(int k=0;k<other->faceCount;++k)if(other->ids[k]==R->ids[i])j=k;
+        if(j>=0) {
+            // Interpolate between the two real measurements around this frame.
+            const float f=static_cast<float>(std::clamp((t-A->at)/(std::max)(1.,B->at-A->at),0.,1.));
+            const int ia=R==A?i:j,ib=R==A?j:i;
+            for(int p=0;p<8;++p)predicted[i*8+p]=A->points[ia*8+p]*(1.f-f)+B->points[ib*8+p]*f;
+        } else {
+            QVector2D off=playing?R->velocities[i]*static_cast<float>(std::clamp((t-R->at)/1000.,-.06,.06)):QVector2D();
+            const float bound=(R->points[i*8+2]-R->points[i*8+3]).length()*.25f;
+            if(off.length()>bound&&bound>0.f)off=off.normalized()*bound;
+            for(int p=0;p<8;++p)predicted[i*8+p]=R->points[i*8+p]+off;
+        }
+        offsets[i]=(predicted[i*8+2]+predicted[i*8+3])*.5f-center;
+    }
+    if(faces>0){drawnEyes_[0]=predicted[0];drawnEyes_[1]=predicted[1];}
+    effectWeights_=valid?R->weights:std::array<float,4>{};
+    if(valid&&!R->uploaded) {
+        for(auto [image,texture]:{std::pair<const QImage*,GLuint>{&R->mask,R->maskTexture},{&R->swap,R->swapTexture}}) {
+            const QImage rgba=image->convertToFormat(QImage::Format_RGBA8888);
+            glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,texture);glPixelStorei(GL_UNPACK_ALIGNMENT,4);
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,rgba.width(),rgba.height(),0,GL_RGBA,GL_UNSIGNED_BYTE,rgba.constBits());
+        }
+        const_cast<Result*>(R)->uploaded=true;glActiveTexture(GL_TEXTURE0);
+    }
+    const GLuint maskTexture=valid?R->maskTexture:maskTexture_,swapTexture=valid?R->swapTexture:swapTexture_;
+    const int swapFaces=valid?R->swapFaces:0;
     if(maskDirty_)uploadMask();
-    const bool useSwap=!originalPreview_&&swapEnabled_&&swapSourceReady_&&valid&&swapFaces_>0&&swapStrength_>0&&trackingWeight>0;
-    unsigned int inputFbo=frame_->handle(),inputTexture=frame_->texture();
+    const bool useSwap=!originalPreview_&&swapEnabled_&&swapSourceReady_&&valid&&swapFaces>0&&swapStrength_>0&&trackingWeight>0;
+    unsigned int inputFbo=shown->handle(),inputTexture=shown->texture();
     if(useSwap) {
         if(!composite_||composite_->size()!=renderSize) {
             QOpenGLFramebufferObjectFormat fmt;fmt.setInternalTextureFormat(GL_RGBA8);
@@ -218,14 +304,14 @@ void VideoWidget::paintGL() {
         glBindFramebuffer(GL_FRAMEBUFFER,composite_->handle());glViewport(0,0,renderSize.width(),renderSize.height());
         glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glDisable(GL_SCISSOR_TEST);
         shader_->bind();
-        glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,frame_->texture());
-        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,swapTexture_);
-        glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,frame_->texture());
+        glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,shown->texture());
+        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,swapTexture);
+        glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,shown->texture());
         shader_->setUniformValue("frameTex",0);shader_->setUniformValue("swapTex",2);shader_->setUniformValue("originalTex",3);
         shader_->setUniformValue("enabled",0);shader_->setUniformValue("compareMode",0);
         shader_->setUniformValue("swapEnabled",1);shader_->setUniformValue("swapPrecomposed",0);
         shader_->setUniformValue("swapStrength",swapStrength_/100.f*trackingWeight);
-        shader_->setUniformValue("faceCount",0);shader_->setUniformValue("trackedFaceCount",faceCount_);
+        shader_->setUniformValue("faceCount",0);shader_->setUniformValue("trackedFaceCount",faces);
         shader_->setUniformValue("imageSize",QVector2D(renderSize.width(),renderSize.height()));
         shader_->setUniformValueArray("points",predicted.data(),32);shader_->setUniformValueArray("faceMotion",offsets.data(),4);
         glBindVertexArray(vao_);glDrawArrays(GL_TRIANGLES,0,3);glBindVertexArray(0);shader_->release();
@@ -239,13 +325,13 @@ void VideoWidget::paintGL() {
         displayedBeauty_[p.key]=value;
     }
     if(blend>=1.)beautyTransitionPending_=false;
-    bool useGPUPixel=!originalPreview_&&beautyEnabled_&&beautyEngine_=="gpupixel"&&gpupixelReady_&&valid&&faceCount_>0&&trackingWeight>0;
-    if(useGPUPixel && (gpupixelFrame_!=rendered_||gpupixelDirty_||useSwap)) {
+    bool useGPUPixel=!originalPreview_&&beautyEnabled_&&beautyEngine_=="gpupixel"&&gpupixelReady_&&valid&&faces>0&&trackingWeight>0;
+    if(useGPUPixel && (gpupixelFrame_!=slots_[show].id||gpupixelDirty_||useSwap)) {
         for(int i=0;i<8;++i)glBindSampler(i,0);
         try {gpupixelTexture_=gpupixel_.render(inputFbo,renderSize.width(),renderSize.height(),displayedBeauty_);}
         catch(const std::exception& error) {gpupixelTexture_=0;gpupixelError_=QString::fromUtf8(error.what());}
         if(!gpupixelTexture_) {gpupixelReady_=false;emit errorOccurred("美颜渲染不可用 · 已回原片");emit analysisStatus("肤质引擎不可用 · 原片");}
-        gpupixelFrame_=rendered_;gpupixelDirty_=false;
+        gpupixelFrame_=slots_[show].id;gpupixelDirty_=false;
     }
     useGPUPixel=useGPUPixel&&gpupixelTexture_!=0;
     glBindFramebuffer(GL_FRAMEBUFFER,defaultFramebufferObject());
@@ -254,10 +340,10 @@ void VideoWidget::paintGL() {
     if(maskDirty_) uploadMask();
     shader_->bind();
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D,useGPUPixel?gpupixelTexture_:inputTexture);
-    glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D,frame_->texture());
+    glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D,shown->texture());
     glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D,inputTexture);
-    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,maskTexture_);
-    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D,swapTexture_);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,maskTexture);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D,swapTexture);
     shader_->setUniformValue("originalTex",3); shader_->setUniformValue("gpupixelEnabled",useGPUPixel?1:0);
     shader_->setUniformValue("baseTex",4);
     shader_->setUniformValue("frameTex",0); shader_->setUniformValue("regionTex",1); shader_->setUniformValue("swapTex",2);
@@ -269,8 +355,8 @@ void VideoWidget::paintGL() {
     shader_->setUniformValue("swapEnabled",useSwap?1:0);
     shader_->setUniformValue("swapPrecomposed",1);
     shader_->setUniformValue("swapStrength",swapStrength_/100.f);
-    shader_->setUniformValue("trackedFaceCount",valid?faceCount_:0);
-    shader_->setUniformValue("faceCount",valid&&beautyEnabled_&&useGPUPixel?faceCount_:0);
+    shader_->setUniformValue("trackedFaceCount",faces);
+    shader_->setUniformValue("faceCount",beautyEnabled_&&useGPUPixel?faces:0);
     shader_->setUniformValueArray("points",predicted.data(),32);
     shader_->setUniformValueArray("faceMotion",offsets.data(),4);
     shader_->setUniformValueArray("effectWeights",effectWeights_.data(),4,1);
@@ -278,7 +364,20 @@ void VideoWidget::paintGL() {
         shader_->setUniformValue((QByteArray(param.key)+"Value").constData(),static_cast<float>(displayedBeauty_.value(param.key).toDouble()));
     glBindVertexArray(vao_); glDrawArrays(GL_TRIANGLES,0,3); glBindVertexArray(0);
     shader_->release();resetGLBoundary();
+    // Delayed frames fall due between mpv updates: wake exactly when the next one is due instead of
+    // repainting at the monitor rate, which would starve mpv's own render requests.
+    if(syncActive_) {
+        double next=-1.;
+        for(const auto& s:slots_)if(s.epoch==frameEpoch_&&s.at>slots_[show].at&&(next<0||s.at<next))next=s.at;
+        if(next>0&&!syncWake_.isActive())syncWake_.start(static_cast<int>(std::clamp(next+syncDelayMs_-clock_.elapsed(),0.,250.)));
+    }
 }
+void VideoWidget::applyAudioDelay(double ms) {
+    // Audio is delayed by exactly the picture delay so lip sync is unchanged.
+    if(std::abs(ms-audioDelayMs_)<.5)return;
+    audioDelayMs_=ms;command({"set","audio-delay",QString::number(ms/1000.,'f',3)});
+}
+void VideoWidget::setSyncDisplay(bool enabled) {syncDisplay_=enabled;update();}
 void VideoWidget::resetGLBoundary() {
     // libmpv requires GL defaults. GPUPixel uses client attributes and 8 texture units.
     glUseProgram(0);glBindVertexArray(0);
@@ -409,7 +508,11 @@ void VideoWidget::setSwapOptions(const QString& target,int feather,int strength)
 void VideoWidget::setBeautyEngine(const QString& engine) {
     Q_UNUSED(engine);beautyEngine_="gpupixel";gpupixelDirty_=true;update();
 }
-void VideoWidget::invalidateFaces() {
+void VideoWidget::invalidateFaces(bool keepFrames) {
+    // Seeks, loads and speed changes also drop delayed frames so nothing from before them is shown.
+    // Latency measured before a seek/load (or while hidden) says nothing about what follows.
+    if(!keepFrames){++frameEpoch_;newestSlot_=-1;shownSlot_=-1;needFrame_=true;roundTrips_.clear();lastResultAt_=-1e9;delayTargetMs_=110.;}
+    for(auto& r:results_){r.generation=-1;r.faceCount=0;}
     previousCutSample_=QImage();trackingWeight_=0.;effectWeights_.fill(0.f);faceSignals_=QJsonArray();fallbackNotice_=false;
     swapImage_=QImage(2,2,QImage::Format_RGBA8888);swapImage_.fill(Qt::transparent);swapFaces_=0;
     gpupixelDirty_=true;swapPending_=false;
@@ -455,24 +558,27 @@ void VideoWidget::submitAnalysis() {
         if(worker_->write(payload)!=payload.size()) {emit swapStatus("源照片发送失败");return;}
         sourcePending_=false;sourceBusy_=true;busy_=true;submittedAt_=clock_.elapsed();return;
     }
-    if(awaitingPlayback_||!loaded_||(!beautyEnabled_&&!swapEnabled_)||!frame_||needFrame_||!isVisible()) return;
+    if(awaitingPlayback_||!loaded_||(!beautyEnabled_&&!swapEnabled_)||newestSlot_<0||needFrame_||!isVisible()) return;
     if(!swapPending_ && rendered_==submittedFrame_ && resultGeneration_==generation_) return;
     const double pts=number("time-pos");
     if(!swapPending_ && text("pause")=="yes" && resultGeneration_==generation_ && resultFrame_==rendered_ && std::abs(pts-resultPts_)<.002) return;
     makeCurrent();
-    QSize s=frame_->size(); if(s.width()>960||s.height()>720)s.scale(960,720,Qt::KeepAspectRatio);
+    // Always analyse the newest decoded frame; the display trails it by the sync delay.
+    const FrameSlot& newest=slots_[newestSlot_];
+    QSize s=newest.fbo->size(); if(s.width()>960||s.height()>720)s.scale(960,720,Qt::KeepAspectRatio);
     if(!analysis_||analysis_->size()!=s) analysis_=std::make_unique<QOpenGLFramebufferObject>(s);
-    QOpenGLFramebufferObject::blitFramebuffer(analysis_.get(),QRect(QPoint(),s),frame_.get(),QRect(QPoint(),frame_->size()),GL_COLOR_BUFFER_BIT,GL_LINEAR);
+    QOpenGLFramebufferObject::blitFramebuffer(analysis_.get(),QRect(QPoint(),s),newest.fbo.get(),QRect(QPoint(),newest.fbo->size()),GL_COLOR_BUFFER_BIT,GL_LINEAR);
     const QImage image=analysis_->toImage().convertToFormat(QImage::Format_RGBA8888);
     glBindFramebuffer(GL_FRAMEBUFFER,defaultFramebufferObject()); doneCurrent();
     if(image.isNull()) return;
     const QByteArray rgba(reinterpret_cast<const char*>(image.constBits()),image.sizeInBytes());
-    QJsonObject req{{"id",++requestId_},{"generation",generation_},{"pts",pts},
-        {"width",image.width()},{"height",image.height()},{"rawBytes",rgba.size()},{"sampleTime",double(clock_.elapsed())},
+    // Results are keyed by the frame's render time so the display can place them on its timeline.
+    QJsonObject req{{"id",++requestId_},{"generation",generation_},{"pts",newest.pts},
+        {"width",image.width()},{"height",image.height()},{"rawBytes",rgba.size()},{"sampleTime",newest.at},
         {"paused",text("pause")=="yes"},{"stableBeauty",true},{"swapEnabled",swapEnabled_&&swapSourceReady_},{"swapTarget",swapTarget_},{"swapFeather",swapFeather_}};
     const QByteArray payload=QJsonDocument(req).toJson(QJsonDocument::Compact)+'\n';
     if(worker_->write(payload)!=payload.size()||worker_->write(rgba)!=rgba.size()) { worker_->kill();emit analysisStatus("人脸引擎通信失败"); return; }
-    sourceBusy_=false;busy_=true; submittedFrame_=rendered_; submittedAt_=clock_.elapsed();
+    sourceBusy_=false;busy_=true; submittedFrame_=newest.id; submittedAt_=clock_.elapsed();
 }
 void VideoWidget::workerOutput() {
     workerBuffer_+=worker_->readAllStandardOutput();
@@ -525,13 +631,38 @@ void VideoWidget::workerOutput() {
         for(int i=0;i<std::min(faceCount_,static_cast<int>(motion.size()));++i) {
             const auto v=motion[i].toArray();if(v.size()==2)velocities_[i]=QVector2D(v[0].toDouble(),v[1].toDouble());
         }
+        {
+            Result& r=results_[resultCursor_];resultCursor_=(resultCursor_+1)%static_cast<int>(results_.size());
+            r.at=resultSampleTime_;r.pts=pts;r.generation=generation_;r.faceCount=faceCount_;r.points=points_;r.velocities=velocities_;
+            r.weights=effectWeights_;r.mask=mask_;r.swap=swapImage_;r.swapFaces=swapFaces_;r.uploaded=false;r.ids.fill(-1);
+            const auto ids=obj.value("trackIds").toArray();
+            for(int i=0;i<std::min(faceCount_,static_cast<int>(ids.size()));++i)r.ids[i]=ids[i].toInt(-1);
+            // Delay = latency + sampling interval, so the next analysed frame after any shown one is
+            // normally back in time. Grows at once, shrinks slowly, and only moves in coarse steps
+            // because each change also shifts the audio.
+            if(obj.value("sceneCut").toBool()) {
+                // Place the cut at the frame where it was seen, if a candidate lies since the previous result.
+                cutAt_=resultSampleTime_;++cuts_;
+                for(const double c:cutCandidates_)if(c>lastResultAt_&&c<=resultSampleTime_&&c<cutAt_)cutAt_=c;
+            }
+            // A frame just after one analysed frame waits for the next analysed frame plus its latency.
+            if(lastResultAt_>-1e8 && resultSampleTime_>lastResultAt_ && resultSampleTime_-lastResultAt_<250.){
+                roundTrips_.push_back(std::min(400.,roundTripMs_)+resultSampleTime_-lastResultAt_);if(roundTrips_.size()>40)roundTrips_.pop_front();
+            }
+            lastResultAt_=resultSampleTime_;
+            auto p90=[](std::deque<double> v){if(v.empty())return 0.;std::sort(v.begin(),v.end());return v[static_cast<size_t>(v.size()*.9)];};
+            rtEstimateMs_=p90(roundTrips_);
+            if(roundTrips_.size()>=10)delayTargetMs_=std::round(std::clamp(rtEstimateMs_+10.,70.,220.)/10.)*10.;
+        }
         fallbackNotice_=false;
         emit analysisStatus(!gpupixelReady_?"肤质引擎不可用 · 原片":faceCount_?QString("人像 %1 · 分析 %2 ms%3").arg(faceCount_).arg(analysisMs_,0,'f',0).arg(roundTripMs_>120?" · 延迟较高，效果减弱":""):"未检测到可靠人脸 · 原画");
         update();QTimer::singleShot(0,this,&VideoWidget::submitAnalysis);
     }
 }
 QJsonObject VideoWidget::diagnostics() const {
-    return {{"version","0.6.0"},{"originalPreview",originalPreview_},{"beautyTransitionPending",beautyTransitionPending_},{"cutReadbackMeanMs",cutReadbackSamples_?cutReadbackMs_/cutReadbackSamples_:0.},{"cutReadbackMaxMs",cutReadbackMaxMs_},{"cutReadbackSamples",cutReadbackSamples_},{"trackingWeight",trackingWeight_},{"faceSignals",faceSignals_},{"detectedCuts",cuts_},{"avsyncAvailable",properties_.contains("avsync")},{"dropsAvailable",properties_.contains("frame-drop-count")},{"renderWidth",frame_?frame_->width():0},{"renderHeight",frame_?frame_->height():0},{"swapEngine","Deep-Live-Cam"},{"swapPending",swapPending_},{"swapMs",swapMs_},{"swapAgeMs",swapAgeMs_},{"swapError",swapError_},{"beautyEngine",beautyEngine_},{"gpupixelReady",gpupixelReady_},{"gpupixelError",gpupixelError_},{"analysisCompleted",analysisCompleted_},{"roundTripMs",roundTripMs_},{"trackingAgeMs",double(clock_.elapsed())-resultSampleTime_},{"trackingMode",trackingMode_},
+    return {{"version","0.6.0"},{"originalPreview",originalPreview_},{"beautyTransitionPending",beautyTransitionPending_},{"cutReadbackMeanMs",cutReadbackSamples_?cutReadbackMs_/cutReadbackSamples_:0.},{"cutReadbackMaxMs",cutReadbackMaxMs_},{"cutReadbackSamples",cutReadbackSamples_},{"trackingWeight",trackingWeight_},{"faceSignals",faceSignals_},{"detectedCuts",cuts_},{"avsyncAvailable",properties_.contains("avsync")},{"dropsAvailable",properties_.contains("frame-drop-count")},{"renderWidth",newestSlot_>=0&&newestSlot_<static_cast<int>(slots_.size())?slots_[newestSlot_].fbo->width():0},{"renderHeight",newestSlot_>=0&&newestSlot_<static_cast<int>(slots_.size())?slots_[newestSlot_].fbo->height():0},
+        {"syncActive",syncActive_},{"syncDelayMs",syncDelayMs_},{"audioDelayMs",audioDelayMs_},{"displayPts",displayPts_},{"displayLagMs",displayLagMs_},{"frameSlots",static_cast<int>(slots_.size())},
+        {"drawnEyes",QJsonArray{QJsonArray{drawnEyes_[0].x(),drawnEyes_[0].y()},QJsonArray{drawnEyes_[1].x(),drawnEyes_[1].y()}}},{"swapEngine","Deep-Live-Cam"},{"swapPending",swapPending_},{"swapMs",swapMs_},{"swapAgeMs",swapAgeMs_},{"swapError",swapError_},{"beautyEngine",beautyEngine_},{"gpupixelReady",gpupixelReady_},{"gpupixelError",gpupixelError_},{"analysisCompleted",analysisCompleted_},{"roundTripMs",roundTripMs_},{"trackingAgeMs",double(clock_.elapsed())-resultSampleTime_},{"trackingMode",trackingMode_},
         {"position",number("time-pos")},{"duration",number("duration")},{"speed",number("speed",1)},
         {"paused",text("pause")=="yes"},{"faces",faceCount_},{"generation",generation_},{"resultGeneration",resultGeneration_},
         {"analysisMs",analysisMs_},{"rendered",rendered_},{"workerReady",workerReady_},{"awaitingPlayback",awaitingPlayback_},{"needFrame",needFrame_},{"analysisBusy",busy_},

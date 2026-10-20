@@ -9,7 +9,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 ROOT=Path(__file__).resolve().parents[1]
 PORT=29866;PAGE=18867
-HTML='<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000"><video muted loop preload="auto" style="width:1280px;height:720px" src="/sample.mp4"></video>'
+HTML='<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000"><video loop preload="auto" style="width:1280px;height:720px" src="/sample.mp4"></video>'
 
 def fixture(video):
     class Handler(BaseHTTPRequestHandler):
@@ -55,7 +55,7 @@ def main():
             except OSError:time.sleep(.1)
         with sync_playwright() as p:
             context=p.chromium.launch_persistent_context(str(out/'profile'),executable_path=str(ROOT/'tools/chromium153-test/chrome.exe'),headless=False,viewport={'width':1300,'height':760},
-                ignore_default_args=['--disable-backgrounding-occluded-windows'],args=['--window-size=1340,840',f'--disable-extensions-except={ext}',f'--load-extension={ext}'])
+                ignore_default_args=['--disable-backgrounding-occluded-windows','--mute-audio'],args=['--window-size=1340,840','--autoplay-policy=no-user-gesture-required',f'--disable-extensions-except={ext}',f'--load-extension={ext}'])
             worker=context.service_workers[0] if context.service_workers else context.wait_for_event('serviceworker',timeout=30000)
             ident=worker.url.split('/')[2];worker.evaluate('()=>chrome.storage.local.clear()')
             page=context.new_page();page.goto(f'http://127.0.0.1:{PAGE}/');page.wait_for_function('document.querySelector("video").readyState>=2')
@@ -68,6 +68,7 @@ def main():
             popup.wait_for_timeout(400)  # the popup saves its own config 100 ms after a source upload
             popup.evaluate('async(tab)=>{const c=(await chrome.runtime.sendMessage({type:"config"})).config;c.swapEnabled=true;c.swapStrength=100;c.enabled=%s;return chrome.runtime.sendMessage({type:"set-config",tabId:tab,config:c});}'%('true' if args.beauty else 'false'),tab)
             page.bring_to_front();page.evaluate('document.querySelector("video").play()');page.wait_for_timeout(2500)
+            page.wait_for_timeout(1500)
             samples=[];start=time.monotonic()
             while time.monotonic()-start<args.seconds:
                 page.wait_for_timeout(100)
@@ -78,6 +79,7 @@ def main():
             for name,enabled in [('look-original',False),('look-beauty',True)]:
                 popup.evaluate('async([tab,on])=>{const c=(await chrome.runtime.sendMessage({type:"config"})).config;c.swapEnabled=false;c.enabled=on;return chrome.runtime.sendMessage({type:"set-config",tabId:tab,config:c});}',[tab,enabled])
                 page.bring_to_front();page.wait_for_timeout(1500);page.screenshot(path=str(out/(name+'.png')))
+            report['syncActiveRatio']=round(sum(1 for s in samples if s.get('syncActive'))/max(1,len(samples)),2);report['syncDelayMs']=samples[-1].get('syncDelayMs')
             keys=['roundTripMs','analysisMs','swapMs','swapAgeMs','encodeMs','frameBytes','trackingAgeMs']
             report.update({k:stats([s.get(k) for s in samples]) for k in keys})
             report['visibleSwapLagMs']=stats([s.get('roundTripMs',0)+s.get('swapAgeMs',0) for s in samples if s.get('swapFaces')])

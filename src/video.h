@@ -13,7 +13,10 @@
 #include <QVector2D>
 #include <QVariant>
 #include <QHash>
+#include <array>
+#include <deque>
 #include <memory>
+#include <vector>
 
 class VideoWidget final : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
@@ -36,7 +39,8 @@ public:
     void setSwapEnabled(bool enabled);
     void setSwapSource(const QString& path);
     void setSwapOptions(const QString& target, int feather, int strength);
-    void invalidateFaces();
+    void setSyncDisplay(bool enabled);
+    void invalidateFaces(bool keepFrames = false);
     QJsonObject diagnostics() const;
     void saveFrame(const QString& path);
     void shutdown();
@@ -65,6 +69,28 @@ private:
     void submitAnalysis();
     void uploadMask();
     void resetGLBoundary();
+    void applyAudioDelay(double ms);
+    // Synchronised display: mpv frames are kept in a short ring and shown a constant delay later
+    // (audio delayed to match), so every shown frame lies between two finished analyses and effect
+    // geometry is interpolated from measurements instead of extrapolated into the future.
+    struct FrameSlot { std::unique_ptr<QOpenGLFramebufferObject> fbo; double pts = 0., at = -1e9; int id = -1, epoch = -1; };
+    struct Result {
+        double at = -1e9, pts = -999.; int generation = -1, faceCount = 0, swapFaces = 0;
+        std::array<QVector2D,32> points{}; std::array<QVector2D,4> velocities{}; std::array<float,4> weights{}; std::array<int,4> ids{};
+        QImage mask, swap; GLuint maskTexture = 0, swapTexture = 0; bool uploaded = false;
+    };
+    std::vector<FrameSlot> slots_;
+    std::array<Result,4> results_;
+    int newestSlot_ = -1, resultCursor_ = 0, frameEpoch_ = 0, shownSlot_ = -1;
+    bool syncDisplay_ = true, syncActive_ = false;
+    double syncDelayMs_ = 110., audioDelayMs_ = 0., displayPts_ = 0., displayLagMs_ = 0., rtEstimateMs_ = 60.;
+    double lastResultAt_ = -1e9, cutAt_ = -1e9, delayTargetMs_ = 110.;
+    std::deque<double> roundTrips_, cutCandidates_;
+    std::deque<bool> bracketed_;
+    int lastShownId_ = -1;
+    double playingSince_ = 0.;
+    std::array<QVector2D,2> drawnEyes_{};
+    QTimer syncWake_;
     QString root_;
     MpvApi api_;
     mpv_handle* handle_ = nullptr;

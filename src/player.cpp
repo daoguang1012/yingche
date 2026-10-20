@@ -582,6 +582,7 @@ void PlayerWindow::testTick() {
                 else if(action=="resize")resize(o.value("width").toInt(1220),o.value("height").toInt(760));
                 else if(action=="test-stall")QThread::msleep(static_cast<unsigned long>(std::clamp(o.value("ms").toInt(),0,1000)));
                 else if(action=="enabled")beautyToggle_->setChecked(o.value("value").toBool());
+                else if(action=="sync")video_->setSyncDisplay(o.value("value").toBool());
                 else if(action=="compare")compareToggle_->setChecked(o.value("value").toBool());
                 else if(action=="swap-source") {sourceLabel_->setText(QFileInfo(o.value("path").toString()).fileName());video_->setSwapSource(o.value("path").toString());}
                 else if(action=="swap") {swapToggle_->setChecked(o.value("value").toBool());video_->setSwapOptions(o.value("target").toString("largest"),o.value("feather").toInt(35),o.value("strength").toInt(100));}

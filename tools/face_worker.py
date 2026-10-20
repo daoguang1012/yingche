@@ -18,6 +18,24 @@ INNER = [78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191]
 BROWS = [[70,63,105,66,107,55,65,52,53,46], [336,296,334,293,300,276,283,282,295,285]]
 SWAP_WAIT_SECONDS = .045
 
+def cut_signature(image):
+    small=cv2.resize(image,(64,36),interpolation=cv2.INTER_AREA)
+    hist=cv2.calcHist([cv2.cvtColor(small,cv2.COLOR_RGB2HSV)],[0,1],None,[16,8],[0,180,0,256]);cv2.normalize(hist,hist,1,0,cv2.NORM_L1)
+    return cv2.resize(image,(32,18)).astype(np.float32),hist,cv2.cvtColor(small,cv2.COLOR_RGB2GRAY).astype(np.float32)
+
+def is_cut(old,new):
+    """A cut needs a large change, a changed colour distribution, and no small global shift explaining it.
+    Fast head or camera motion passes the first test but not the other two (calibrated on generated
+    swing/zoom/tilt/shake clips: shifted difference <= 22, hard cuts >= 32; histogram distance <= .27 vs >= .30)."""
+    if old is None or float(np.mean(np.abs(new[0]-old[0])))<=35:return False
+    if cv2.compareHist(old[1],new[1],cv2.HISTCMP_BHATTACHARYYA)<=.2:return False
+    a,b=old[2],new[2];best=1e9
+    for dy in range(-5,6):
+        for dx in range(-8,9):
+            best=min(best,float(np.mean(np.abs(a[max(0,dy):36+min(0,dy),max(0,dx):64+min(0,dx)]-b[max(0,-dy):36+min(0,-dy),max(0,-dx):64+min(0,-dx)]))))
+            if best<=26:return False
+    return True
+
 def write(obj):
     sys.stdout.write(json.dumps(obj, separators=(',', ':')) + '\n')
     sys.stdout.flush()
@@ -170,8 +188,8 @@ class FaceProcessor:
             return {'id':req.get('id'),'sourceReady':False,'cleared':True}
         image=decode_image(req)
         if image.shape[0]*image.shape[1]>1_000_000:raise ValueError('Analysis frame too large')
-        thumb=cv2.resize(image,(32,18)).astype(np.float32)
-        cut=self.last_thumb is not None and np.mean(np.abs(thumb-self.last_thumb))>35
+        thumb=cut_signature(image)
+        cut=is_cut(self.last_thumb,thumb)
         generation=req.get('generation',0)
         stream_generation=(req.get('streamId','native'),generation)
         sample_time=float(req.get('sampleTime',time.monotonic()*1000))/1000.

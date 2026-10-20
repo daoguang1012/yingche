@@ -52,11 +52,36 @@ globalThis.YingchePresentation=YingchePresentation;
 (() => {
 if(globalThis.__yingcheController)return;
 const send=async message=>{const result=await chrome.runtime.sendMessage(message);if(result?.error)throw Error(result.error);return result;};
-const controller={version:'0.6.1',engine:'GPUPixel WASM',engineReady:false,active:false,generation:0,busy:false,frames:0,analysis:0,lastError:'',needsCapture:false,stream:null};
+const controller={version:'0.6.2',engine:'GPUPixel WASM',engineReady:false,active:false,generation:0,busy:false,frames:0,analysis:0,lastError:'',needsCapture:false,stream:null};
 let video,input,host,canvas,panel,renderer,presentation,config,raf,observer,lastSubmit=0,lastPosition=-1,parentStyle,videoStyle,seekHandler,originalParent,visibilityHandler,playHandler,captureCanvas,captureContext,lastAnalysisFrame=-1,lastPaint=-1000;
 function base64(bytes){let text='';for(let i=0;i<bytes.length;i+=16384)text+=String.fromCharCode(...bytes.subarray(i,i+16384));return btoa(text);}
 function status(text,error=false){controller.lastError=error?text:'';if(panel)panel.querySelector('.status').textContent=text;}
-function invalidate(){controller.generation++;renderer?.clear();interpolation?.reset();lastSubmit=0;lastAnalysisFrame=-1;controller.swapPending=false;}
+function invalidate(keepFrames=false){if(keepFrames!==true)controller.mediaTime=undefined;controller.generation++;renderer?.clear(keepFrames===true);interpolation?.reset();lastSubmit=0;lastAnalysisFrame=-1;controller.swapPending=false;}
+// The page audio is delayed exactly like the synchronised picture. Routing an element through Web Audio
+// is permanent for that element, so it happens only once the context is confirmed running and frames
+// are readable (same-origin media, hence audible through Web Audio); otherwise sync stays off.
+const audioRoutes=globalThis.__yingcheAudioRoutes||(globalThis.__yingcheAudioRoutes=new WeakMap());
+let audioPending=null;
+function audioRoute(element){
+ if(audioRoutes.has(element)||audioPending)return;
+ audioPending=(async()=>{
+  let context;
+  try{
+   context=new AudioContext({latencyHint:'interactive'});
+   await Promise.race([context.resume(),new Promise(r=>setTimeout(r,800))]);
+   if(context.state!=='running'){await context.close();return;}
+   const delay=context.createDelay(1);context.createMediaElementSource(element).connect(delay).connect(context.destination);
+   audioRoutes.set(element,{context,delay});
+  }catch(e){try{await context?.close();}catch{}}
+ })().finally(()=>{audioPending=null;});
+}
+function setAudioDelay(ms){
+ const route=video&&audioRoutes.get(video);if(!route)return;
+ // Web Audio adds its own base latency on top of what the element path had.
+ const value=Math.max(0,ms/1000-(route.context.baseLatency||0));
+ if(Math.abs(route.delay.delayTime.value-value)>.002)route.delay.delayTime.setValueAtTime(value,route.context.currentTime);
+}
+function syncAllowed(){return !!(!globalThis.__yingcheSyncDisabled&&config&&(config.enabled||config.swapEnabled)&&!config.interpolation&&!controller.needsCapture&&input===video&&!video.mediaKeys&&controller.frames>0);}
 function geometry(){
  if(!host||!video)return;
  presentation.setCompatible(config.vsrCompatible);
@@ -89,7 +114,7 @@ async function compatibleCapture(){
 }
 function makePanel(){
  const shell=document.createElement('div');shell.id='yingche-panel';Object.assign(shell.style,{position:'fixed',right:'18px',top:'18px',zIndex:'2147483646'});
- const shadow=shell.attachShadow({mode:'closed'});shadow.innerHTML=`<style>:host{all:initial}*{box-sizing:border-box}section{width:288px;padding:12px 12px 10px;background:#0e1719eb;color:#dce8e5;font:13px/1.45 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;border:1px solid #2f4644;border-radius:14px;box-shadow:0 10px 32px #0008;backdrop-filter:blur(10px)}header{display:flex;align-items:center;gap:8px}.mark{width:20px;height:20px;border-radius:50%;background:#b0dbc1;position:relative;flex:none}.mark:after{content:"";position:absolute;left:8px;top:6px;border-style:solid;border-width:4px 0 4px 7px;border-color:transparent transparent transparent #183c2c}.title{flex:1;min-width:0}.title strong{display:block;font-size:13px;color:#eef7f3}.title span{display:block;font-size:10px;color:#86a39a}button,input,select{font:inherit}button{background:#1b2a2c;color:#e3efea;border:1px solid #33494a;border-radius:8px;padding:5px 10px;cursor:pointer}button:hover{background:#25393a;border-color:#5f8a79}.icon{width:28px;height:28px;padding:0;display:grid;place-items:center;font-size:14px;line-height:1}.close:hover{background:#3a2421;border-color:#7a4237}.status{font-size:11px;line-height:1.5;color:#adc7bd;margin:10px 0 8px;padding:6px 8px;border-radius:8px;background:#132022;overflow-wrap:anywhere}.row{display:flex;gap:6px;align-items:center}.row .play{flex:1;background:#9dceb7;border-color:#9dceb7;color:#10241d;font-weight:600}.row .play:hover{background:#bee2ce}.timeline{width:100%;margin:10px 0 2px;accent-color:#9dceb7}select{color:#dce8e5;background:#0e181a;border:1px solid #33494a;border-radius:8px;padding:4px 6px}.capture{width:100%;margin-top:8px;border-color:#6c5a2f;color:#f1d58e}button[hidden]{display:none}section.min{width:auto;padding:8px 10px}section.min .body{display:none}</style><section><header><span class="mark"></span><div class="title"><strong>映澈美颜</strong><span>GPUPixel · 0.6.1</span></div><button class="icon fold" title="收起">–</button><button class="icon close" title="停止增强">×</button></header><div class="body"><div class="status">正在初始化 GPUPixel…</div><div class="row"><button class="play">播放 / 暂停</button><select class="speed" aria-label="倍速"><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select><button class="full">网页全屏</button></div><input class="timeline" type="range" min="0" max="1000" step="1" value="0" aria-label="播放进度"><button class="capture" hidden>跨域兼容捕获</button></div></section>`;
+ const shadow=shell.attachShadow({mode:'closed'});shadow.innerHTML=`<style>:host{all:initial}*{box-sizing:border-box}section{width:288px;padding:12px 12px 10px;background:#0e1719eb;color:#dce8e5;font:13px/1.45 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;border:1px solid #2f4644;border-radius:14px;box-shadow:0 10px 32px #0008;backdrop-filter:blur(10px)}header{display:flex;align-items:center;gap:8px}.mark{width:20px;height:20px;border-radius:50%;background:#b0dbc1;position:relative;flex:none}.mark:after{content:"";position:absolute;left:8px;top:6px;border-style:solid;border-width:4px 0 4px 7px;border-color:transparent transparent transparent #183c2c}.title{flex:1;min-width:0}.title strong{display:block;font-size:13px;color:#eef7f3}.title span{display:block;font-size:10px;color:#86a39a}button,input,select{font:inherit}button{background:#1b2a2c;color:#e3efea;border:1px solid #33494a;border-radius:8px;padding:5px 10px;cursor:pointer}button:hover{background:#25393a;border-color:#5f8a79}.icon{width:28px;height:28px;padding:0;display:grid;place-items:center;font-size:14px;line-height:1}.close:hover{background:#3a2421;border-color:#7a4237}.status{font-size:11px;line-height:1.5;color:#adc7bd;margin:10px 0 8px;padding:6px 8px;border-radius:8px;background:#132022;overflow-wrap:anywhere}.row{display:flex;gap:6px;align-items:center}.row .play{flex:1;background:#9dceb7;border-color:#9dceb7;color:#10241d;font-weight:600}.row .play:hover{background:#bee2ce}.timeline{width:100%;margin:10px 0 2px;accent-color:#9dceb7}select{color:#dce8e5;background:#0e181a;border:1px solid #33494a;border-radius:8px;padding:4px 6px}.capture{width:100%;margin-top:8px;border-color:#6c5a2f;color:#f1d58e}button[hidden]{display:none}section.min{width:auto;padding:8px 10px}section.min .body{display:none}</style><section><header><span class="mark"></span><div class="title"><strong>映澈美颜</strong><span>GPUPixel · 0.6.2</span></div><button class="icon fold" title="收起">–</button><button class="icon close" title="停止增强">×</button></header><div class="body"><div class="status">正在初始化 GPUPixel…</div><div class="row"><button class="play">播放 / 暂停</button><select class="speed" aria-label="倍速"><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select><button class="full">网页全屏</button></div><input class="timeline" type="range" min="0" max="1000" step="1" value="0" aria-label="播放进度"><button class="capture" hidden>跨域兼容捕获</button></div></section>`;
  document.documentElement.append(shell);panel=shadow;
  shadow.querySelector('.close').onclick=()=>stop();shadow.querySelector('.fold').onclick=e=>{const min=shadow.querySelector('section').classList.toggle('min');e.target.textContent=min?'+':'–';e.target.title=min?'展开':'收起';};shadow.querySelector('.play').onclick=()=>video.paused?video.play().catch(e=>status(e.message,true)):video.pause();shadow.querySelector('.speed').onchange=e=>{video.playbackRate=Number(e.target.value);};shadow.querySelector('.full').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await originalParent.requestFullscreen();}catch(e){status(e.message,true);}};
  shadow.querySelector('.timeline').oninput=e=>{if(Number.isFinite(video.duration))video.currentTime=video.duration*Number(e.target.value)/1000;};shadow.querySelector('.capture').onclick=compatibleCapture;
@@ -106,6 +131,14 @@ function watchFrames(){
  frameInput=input;
  const next=(now,metadata)=>{
   if(!controller.active||frameInput!==input)return;
+  // Exact timestamp of the frame now on screen; video.currentTime is the clock and can be a frame off.
+  controller.mediaTime=metadata.mediaTime;
+  if(renderer.syncWanted&&!interpolation&&!controller.needsCapture&&controller.engineReady){
+   try{renderer.ingest(input,metadata.mediaTime,canvas.width,canvas.height);}catch(e){status(e.message,true);}
+   // Grab the analysis frame inside this callback too: here the element is guaranteed to show exactly
+   // the frame just put in the ring, while a later grab can already be the next frame.
+   if(renderer.syncActive)maybeAnalyze(performance.now());
+  }
   if(interpolation?.runtime&&!video.paused&&!video.seeking&&!controller.needsCapture&&controller.engineReady){
    try{if(renderer.render(input,config,video.currentTime,video.playbackRate,false))interpolation.capture(canvas,now,metadata);}
    catch(e){interpolation.fail(e.message);}
@@ -120,27 +153,33 @@ function loop(now){
  try{geometry();}catch(e){host.style.visibility='hidden';status(e.message,true);raf=requestAnimationFrame(loop);return;}
  if(Number.isFinite(video.duration)&&video.duration>0)panel.querySelector('.timeline').value=String(video.currentTime/video.duration*1000);
  if(!controller.needsCapture&&input.readyState>=2){
+  const wantSync=syncAllowed();if(wantSync)audioRoute(video);
+  renderer.syncWanted=wantSync&&audioRoutes.has(video);setAudioDelay(renderer.syncWanted?renderer.delayMs:0);
   try{if(now-lastPaint>=1000/60-1){
    lastPaint=now;let frame=null;
    if(interpolation&&!video.paused&&!video.seeking){try{frame=interpolation.draw(now);}catch(e){interpolation.fail(e.message);}}
    if(!frame?.hold){const source=frame?.source||(interpolation?.state==='bypass'&&!video.paused?canvas:null);
-    if((source||renderer.render(input,config,video.currentTime,video.playbackRate,video.paused))&&presentation.present(source||canvas))host.style.visibility='visible';}
+    if((source||renderer.render(input,config,controller.mediaTime??video.currentTime,video.playbackRate,video.paused))&&presentation.present(source||canvas))host.style.visibility='visible';}
    controller.frames=renderer.frames;
   }}
   catch(e){if(e.name==='SecurityError'||/origin|cross/i.test(e.message)){controller.needsCapture=true;host.style.visibility='hidden';panel.querySelector('.capture').hidden=false;status('此视频禁止直接取帧，请点击跨域兼容捕获并选择当前标签页',true);}else {host.style.visibility='hidden';status(e.message,true);}}
-  const frameId=input.getVideoPlaybackQuality?.().totalVideoFrames||input.currentTime;
-  if(!controller.needsCapture&&!controller.busy&&now-lastSubmit>=8&&!video.seeking&&((!video.paused&&frameId!==lastAnalysisFrame)||lastPosition!==video.currentTime||controller.swapPending)){
-   controller.busy=true;lastSubmit=now;lastPosition=video.currentTime;lastAnalysisFrame=frameId;const epoch=controller.generation;
-   analyze(epoch).finally(()=>{controller.busy=false;});
-  }
+  if(!renderer.syncActive)maybeAnalyze(now);
  }
  raf=requestAnimationFrame(loop);
+}
+function maybeAnalyze(now){
+ const frameId=input.getVideoPlaybackQuality?.().totalVideoFrames||input.currentTime;
+ if(!controller.needsCapture&&!controller.busy&&now-lastSubmit>=8&&!video.seeking&&((!video.paused&&frameId!==lastAnalysisFrame)||lastPosition!==video.currentTime||controller.swapPending)){
+  controller.busy=true;lastSubmit=now;lastPosition=video.currentTime;lastAnalysisFrame=frameId;const epoch=controller.generation;
+  analyze(epoch).finally(()=>{controller.busy=false;});
+ }
 }
 async function analyze(epoch){
  try{
   const w=input.videoWidth,h=input.videoHeight;const scale=Math.min(960/w,720/h,1),cw=Math.max(2,Math.round(w*scale)),ch=Math.max(2,Math.round(h*scale));
   if(!captureCanvas||captureCanvas.width!==cw||captureCanvas.height!==ch){captureCanvas=new OffscreenCanvas(cw,ch);captureContext=captureCanvas.getContext('2d',{alpha:false});}
-  const pts=video.currentTime,sampleTime=performance.now(),paused=video.paused,settings=config;
+  // While synchronised, key the result to the ring frame just captured so it lands on the display timeline.
+  const keyed=renderer.newestFrame(),pts=keyed?keyed.pts:controller.mediaTime??video.currentTime,sampleTime=keyed?keyed.at:performance.now(),paused=video.paused,settings=config;
   captureContext.drawImage(input,0,0,cw,ch);
   // A compressed frame avoids cloning multi-megabyte RGBA strings through MV3 messaging.
   const blob=await captureCanvas.convertToBlob({type:'image/jpeg',quality:.94});
@@ -167,7 +206,7 @@ async function start(newConfig){
  const activeRenderer=renderer;await activeRenderer.ready;if(!controller.active||renderer!==activeRenderer)return {active:false};controller.engineReady=true;controller.engine=activeRenderer.gpu.version;observer=new ResizeObserver(geometry);observer.observe(video);watchFrames();raf=requestAnimationFrame(loop);return {active:true,version:controller.version,engine:controller.engine,videoWidth:video.videoWidth,videoHeight:video.videoHeight};
 }
 function stop(){
- controller.active=false;controller.engineReady=false;controller.generation++;cancelAnimationFrame(raf);observer?.disconnect();observer=null;
+ setAudioDelay(0);controller.active=false;controller.engineReady=false;controller.generation++;cancelAnimationFrame(raf);observer?.disconnect();observer=null;
  if(frameInput&&frameCallback!==undefined)frameInput.cancelVideoFrameCallback(frameCallback);frameInput=null;frameCallback=undefined;interpolation?.dispose();interpolation=null;
  controller.stream?.getTracks().forEach(t=>t.stop());controller.stream=null;
  if(video&&seekHandler){video.removeEventListener('seeking',seekHandler);video.removeEventListener('loadeddata',seekHandler);}
@@ -182,8 +221,8 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
  if(sender.id!==chrome.runtime.id)return;
  if(message.type==='yingche-start'){start(message.config).then(reply).catch(e=>{stop();reply({error:e.message});});return true;}
  if(message.type==='yingche-stop'){reply(stop());return;}
- if(message.type==='yingche-config'){config=message.config;invalidate();lastPosition=-1;reply({ok:true});return;}
- if(message.type==='yingche-status'){reply({version:controller.version,engine:controller.engine,engineReady:controller.engineReady,swapMs:controller.swapMs||0,swapState:controller.swapState,swapAgeMs:controller.swapAgeMs,swapReused:controller.swapReused,swapPending:controller.swapPending,swapError:controller.swapError,active:controller.active,frames:controller.frames,analysis:controller.analysis,faces:controller.lastFaces||0,swapFaces:controller.swapFaces||0,analysisMs:controller.analysisMs||0,roundTripMs:controller.roundTripMs||0,frameBytes:controller.frameBytes||0,encodeMs:controller.encodeMs||0,...(renderer?.status||{}),presentation:presentation?.compatible?'video':'canvas',outputFrames:presentation?.frames||0,outputFps:presentation?.fps||0,...(interpolation?.status||{interpolationState:'off'}),outputWidth:canvas?.width||0,outputHeight:canvas?.height||0,needsCapture:controller.needsCapture,error:controller.lastError});}
+ if(message.type==='yingche-config'){config=message.config;invalidate(true);lastPosition=-1;reply({ok:true});return;}
+ if(message.type==='yingche-status'){reply({version:controller.version,engine:controller.engine,engineReady:controller.engineReady,swapMs:controller.swapMs||0,swapState:controller.swapState,swapAgeMs:controller.swapAgeMs,swapReused:controller.swapReused,swapPending:controller.swapPending,swapError:controller.swapError,active:controller.active,frames:controller.frames,analysis:controller.analysis,faces:controller.lastFaces||0,swapFaces:controller.swapFaces||0,analysisMs:controller.analysisMs||0,roundTripMs:controller.roundTripMs||0,frameBytes:controller.frameBytes||0,encodeMs:controller.encodeMs||0,...(renderer?.status||{}),presentation:presentation?.compatible?'video':'canvas',outputFrames:presentation?.frames||0,outputFps:presentation?.fps||0,...(interpolation?.status||{interpolationState:'off'}),outputWidth:canvas?.width||0,outputHeight:canvas?.height||0,needsCapture:controller.needsCapture,audioRouted:!!(video&&audioRoutes.has(video)),audioDelayMs:video&&audioRoutes.get(video)?Math.round(audioRoutes.get(video).delay.delayTime.value*1000):0,error:controller.lastError});}
 });
 controller.stop=stop;globalThis.__yingcheController=controller;
 })();

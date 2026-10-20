@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "映澈 · 网页美颜与换脸",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "本机 AI 美颜、换脸与 60 FPS 神经网络补帧，支持 RTX VSR 兼容视频输出。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz3hiIUv6EBYK/IUtDXD/o6HUv1Kkhsx1VGMyz4m1JPBB3r6QOooSJg9QG3OpZwOslonNyjIJyljdaWcIWyC+FGY80m+8TKXauV7hXN/lhVX/BCPYe22e/YOAgola1CiJZNLAHxsUGIw65zJILCYtgl4zQedMLvVvvu7cOIpIBau+8+RgUogebeAeJx7waf/npb4dKRdGj3PtidFxTd2IhDWriXLyTbwpevLv993lbo45TMk9bMXrR5pbcvFXarWThZEMOnDhh4cChspllzUvsrvcI/EpkZanvsQRDNzww9ZKbBZeh0KWOewPpxXGR18eYl4nZCHJMkCLjaMuFjZLiQIDAQAB",
   "minimum_chrome_version": "132",

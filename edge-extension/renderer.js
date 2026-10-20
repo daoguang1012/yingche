@@ -16,9 +16,20 @@ class YingcheRenderer {
   this.vao=g.createVertexArray();this.data=null;this.frames=0;this.disposed=false;this.analysisEpoch=0;
   this.gpu=new YingcheGPUPixel(canvas,g,this.textures[0]);this.ready=this.gpu.initialized;
   this.points=new Float32Array(64);this.motion=new Float32Array(8);this.lastInput=-1;this.lastGPUKey='';this.latencyMs=70;this.intervalMs=70;this.lastSampleTime=null;this.status={trackingWeight:0,shownFaces:0,shownSwapFaces:0};
+  // Synchronised display (enabled by the controller only when it can delay the page audio equally):
+  // decoded frames wait in a short ring and are shown delayMs later, so each shown frame lies
+  // between two finished analyses and effect geometry is interpolated, not extrapolated.
+  this.syncWanted=false;this.syncActive=false;this.ring=[];this.ringEpoch=0;this.frameId=0;this.newest=null;this.shown=null;
+  this.results=[0,1,2,3].map(()=>({at:-1e9,epoch:-1,mask:this.texture(),swap:this.texture()}));this.resultCursor=0;
+  this.delayMs=110;this.delayTarget=110;this.roundTrips=[];this.bracketed=[];this.playingSince=0;this.lastShownId=-1;
+  this.readFbo=g.createFramebuffer();this.drawFbo=g.createFramebuffer();
  }
+ texture(){const g=this.gl,t=g.createTexture();g.bindTexture(g.TEXTURE_2D,t);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MIN_FILTER,g.LINEAR);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MAG_FILTER,g.LINEAR);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_S,g.CLAMP_TO_EDGE);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_T,g.CLAMP_TO_EDGE);g.texImage2D(g.TEXTURE_2D,0,g.RGBA,1,1,0,g.RGBA,g.UNSIGNED_BYTE,new Uint8Array(4));return t;}
  loc(name){if(!(name in this.uniforms))this.uniforms[name]=this.gl.getUniformLocation(this.program,name);return this.uniforms[name];}
- clear(){this.data=null;this.analysisEpoch++;this.lastSampleTime=null;this.status={trackingWeight:0,shownFaces:0,shownSwapFaces:0};}
+ // Seeks/loads also drop delayed frames; a settings change keeps them.
+ clear(keepFrames=false){this.data=null;this.analysisEpoch++;this.lastSampleTime=null;this.status={trackingWeight:0,shownFaces:0,shownSwapFaces:0};if(!keepFrames){this.ringEpoch++;this.newest=null;this.shown=null;this.roundTrips=[];this.delayTarget=110;}}
+ // Frame the next analysis is keyed to, so results land on the display timeline.
+ newestFrame(){return this.syncWanted&&this.newest?.epoch===this.ringEpoch?{at:this.newest.at,pts:this.newest.pts}:null;}
  async analysis(data) {
   const epoch=this.analysisEpoch;
   // ImageBitmap upload ignores WebGL UNPACK_PREMULTIPLY_ALPHA_WEBGL. Keep straight alpha for the shader mix.
@@ -26,38 +37,106 @@ class YingcheRenderer {
   const [mask,swap]=await Promise.all([decode(data.mask),decode(data.swap)]);
   if(this.disposed||epoch!==this.analysisEpoch){mask?.close();swap?.close();return;}
   const g=this.gl;g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL,false);g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-  [mask,swap].forEach((img,j)=>{g.activeTexture(g.TEXTURE1+j);g.bindTexture(g.TEXTURE_2D,this.textures[j+1]);if(img){g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,img);img.close();}else g.texImage2D(g.TEXTURE_2D,0,g.RGBA,1,1,0,g.RGBA,g.UNSIGNED_BYTE,new Uint8Array(4));});
+  const slot=this.results[this.resultCursor];this.resultCursor=(this.resultCursor+1)%this.results.length;
+  [[mask,slot.mask],[swap,slot.swap]].forEach(([img,t])=>{g.activeTexture(g.TEXTURE1);g.bindTexture(g.TEXTURE_2D,t);if(img){g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,img);img.close();}else g.texImage2D(g.TEXTURE_2D,0,g.RGBA,1,1,0,g.RGBA,g.UNSIGNED_BYTE,new Uint8Array(4));});
+  Object.assign(slot,{at:data.sampleTime,pts:data.pts,epoch:this.analysisEpoch,faces:(data.faces||[]).slice(0,4),motion:data.motion||[],ids:data.trackIds||[],hasSwap:!!data.swap,swapFaces:data.swapFaces||0,id:data.id,sceneCut:!!data.sceneCut});
   const latency=Math.max(0,performance.now()-data.sampleTime);
   const gap=this.lastSampleTime===null?0:data.sampleTime-this.lastSampleTime;
   this.latencyMs=this.latencyMs*.6+Math.min(400,latency)*.4;
   if(gap>0&&gap<500)this.intervalMs=this.intervalMs*.6+gap*.4;
+  const push=(list,v)=>{list.push(v);if(list.length>40)list.shift();},p90=list=>{const s=[...list].sort((a,b)=>a-b);return s.length?s[Math.floor(s.length*.9)]:0;};
+  // A frame just after one analysed frame waits for the next analysed frame plus its latency.
+  if(gap>0&&gap<250)push(this.roundTrips,Math.min(400,latency)+gap);
+  if(this.roundTrips.length>=10)this.delayTarget=Math.round(Math.min(250,Math.max(70,p90(this.roundTrips)+10))/10)*10;
   this.lastSampleTime=data.sampleTime;this.data=data;
+ }
+ // Called for every presented video frame while synchronised, with that frame's exact media time.
+ ingest(video,mediaTime,cw,ch){
+  if(this.disposed||!this.gpu.ready||video.readyState<2||!video.videoWidth)return;
+  const g=this.gl;
+  g.activeTexture(g.TEXTURE0);g.bindTexture(g.TEXTURE_2D,this.textures[0]);
+  g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL,true);g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+  g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,video);g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL,false);
+  this.inputW=video.videoWidth;this.inputH=video.videoHeight;
+  this.capture(mediaTime,cw,ch,performance.now());
+ }
+ // Copies the current decoded frame into the delay ring (canvas-sized, so 4K input stays bounded).
+ capture(position,cw,ch,now){
+  const g=this.gl;
+  if(this.ring.length&&(this.ring[0].w!==cw||this.ring[0].h!==ch)){this.ring.forEach(s=>g.deleteTexture(s.tex));this.ring=[];this.newest=null;this.shown=null;}
+  let slot=null;
+  for(const s of this.ring)if(s!==this.newest&&s!==this.shown&&(s.epoch!==this.ringEpoch||s.at<now-this.delayMs-120)&&(!slot||s.at<slot.at))slot=s;
+  if(!slot&&this.ring.length<24){slot={tex:this.texture(),w:cw,h:ch};g.bindTexture(g.TEXTURE_2D,slot.tex);g.texImage2D(g.TEXTURE_2D,0,g.RGBA8,cw,ch,0,g.RGBA,g.UNSIGNED_BYTE,null);this.ring.push(slot);}
+  if(!slot)for(const s of this.ring)if(s!==this.newest&&s!==this.shown&&(!slot||s.at<slot.at))slot=s;
+  g.bindFramebuffer(g.READ_FRAMEBUFFER,this.readFbo);g.framebufferTexture2D(g.READ_FRAMEBUFFER,g.COLOR_ATTACHMENT0,g.TEXTURE_2D,this.textures[0],0);
+  g.bindFramebuffer(g.DRAW_FRAMEBUFFER,this.drawFbo);g.framebufferTexture2D(g.DRAW_FRAMEBUFFER,g.COLOR_ATTACHMENT0,g.TEXTURE_2D,slot.tex,0);
+  g.blitFramebuffer(0,0,this.inputW,this.inputH,0,0,cw,ch,g.COLOR_BUFFER_BIT,g.LINEAR);
+  g.bindFramebuffer(g.READ_FRAMEBUFFER,null);g.bindFramebuffer(g.DRAW_FRAMEBUFFER,null);
+  Object.assign(slot,{at:now,pts:position,id:++this.frameId,epoch:this.ringEpoch});this.newest=slot;
  }
  render(video,config,position,speed=1,paused=video.paused) {
   if(this.disposed||!this.gpu.ready||video.readyState<2||!video.videoWidth)return false;
   const g=this.gl,w=video.videoWidth,h=video.videoHeight,cw=this.canvas.width,ch=this.canvas.height;
   const decodedFrames=video.getVideoPlaybackQuality?.().totalVideoFrames;
   const inputKey=(decodedFrames>0?decodedFrames:video.currentTime)+':'+w+':'+h;
-  if(this.lastInput!==inputKey){
+  const now=performance.now();
+  this.syncActive=this.syncWanted&&!paused;
+  if(!this.syncActive){this.playingSince=now;this.bracketed=[];}
+  if(paused&&Math.abs(this.delayTarget-this.delayMs)>=30)this.delayMs=this.delayTarget;
+  // While synchronised, frames arrive through ingest(); the direct upload covers everything else.
+  const ringLive=this.syncWanted&&this.newest?.epoch===this.ringEpoch;
+  if(!ringLive&&this.lastInput!==inputKey){
    g.activeTexture(g.TEXTURE0);g.bindTexture(g.TEXTURE_2D,this.textures[0]);
    g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL,true);g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
    g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,video);g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL,false);
-   this.lastInput=inputKey;this.lastGPUKey='';
+   this.inputW=w;this.inputH=h;this.lastInput=inputKey;
   }
+  if(ringLive)this.lastInput='';
+  // Frame to show: the one captured delayMs ago while synchronised, otherwise the current one.
+  let shown=null;
+  if(this.syncActive&&this.newest?.epoch===this.ringEpoch){
+   const due=now-this.delayMs;let oldest=null;
+   for(const s of this.ring){if(s.epoch!==this.ringEpoch)continue;if(s.at<=due&&(!shown||s.at>shown.at))shown=s;if(!oldest||s.at<oldest.at)oldest=s;}
+   shown=shown||oldest;
+  }else if(this.syncWanted&&this.newest?.epoch===this.ringEpoch)shown=this.newest;
+  this.shown=shown;
+  const frameTexture=shown?shown.tex:this.textures[0],t=shown?shown.at:now,shownPts=shown?shown.pts:position;
+  if(shown){this.displayPts=shown.pts;this.displayLagMs=now-shown.at;}
+  if(this.lastFrameKey!==(shown?'s'+shown.id:inputKey)){this.lastFrameKey=shown?'s'+shown.id:inputKey;this.lastGPUKey='';}
+  // Analyses around the shown frame; geometry is interpolated between them when both exist.
+  let A=null,B=null;
+  for(const r of this.results){if(r.epoch!==this.analysisEpoch)continue;if(r.at<=t){if(!A||r.at>A.at)A=r;}else if(!B||r.at<B.at)B=r;}
+  // The first result after a confirmed cut belongs to the new shot; frames before it may still be the old one.
+  if(!shown||B?.sceneCut)B=null;
+  if(this.syncActive&&now-this.playingSince>1000+this.delayMs&&shown&&shown.id!==this.lastShownId&&(A||B)){
+   this.lastShownId=shown.id;this.bracketed.push(!!(A&&B));if(this.bracketed.length>60)this.bracketed.shift();
+   const misses=this.bracketed.filter(x=>!x).length;
+   if(this.bracketed.length>=30&&misses>this.bracketed.length*.15&&this.delayTarget>this.delayMs+15){this.delayMs=this.delayTarget;this.bracketed=[];}
+  }
+  const R=B&&(!A||B.at-t<t-A.at)?B:A,other=R===A?B:A;
   // Keep full effect through measured transit plus a normal update interval.
   // The hard cap still rejects old poses if processing stalls.
   const lifetime=Math.min(350,Math.max(220,this.latencyMs+this.intervalMs*1.5+90));
-  const valid=this.data&&Math.abs(position-this.data.pts)*1000<lifetime*Math.max(1,speed);
-  const age=paused?0:Math.max(0,performance.now()-(this.data?.sampleTime||0));
-  const weight=valid?Math.max(0,Math.min(1,(lifetime-age)/80)):0;
-  const faces=valid?this.data.faces:[],swapOn=!!(valid&&config.swapEnabled&&this.data.swap&&config.swapStrength>0&&weight>0);
-  const points=this.points,motion=this.motion,ahead=paused?0:Math.min(age/1000,.060);points.fill(0);motion.fill(0);
-  faces.slice(0,4).forEach((face,i)=>{const velocity=this.data.motion?.[i]||[0,0];let dx=velocity[0]*ahead,dy=velocity[1]*ahead;const bound=Math.hypot(face[2][0]-face[3][0],face[2][1]-face[3][1])*.25,len=Math.hypot(dx,dy);if(len>bound&&bound>0){dx*=bound/len;dy*=bound/len;}motion[i*2]=dx;motion[i*2+1]=dy;face.forEach((p,j)=>{points[i*16+j*2]=p[0]+dx;points[i*16+j*2+1]=p[1]+dy;});});
+  const valid=!!R&&Math.abs(shownPts-R.pts)*1000<lifetime*Math.max(1,speed);
+  const age=paused?0:(A&&B?0:Math.abs(t-(R?.at||0)));
+  // Synchronised frames normally have measurements on both sides; when a latency spike leaves one
+  // without, fade quickly rather than draw an effect where the face no longer is.
+  const weight=valid?Math.max(0,Math.min(1,this.syncActive&&shown?(120-age)/60:(lifetime-age)/80)):0;
+  const faces=valid?R.faces:[],swapOn=!!(valid&&config.swapEnabled&&R.hasSwap&&config.swapStrength>0&&weight>0);
+  const points=this.points,motion=this.motion;points.fill(0);motion.fill(0);
+  faces.forEach((face,i)=>{
+   const j=A&&B&&other?other.ids.indexOf(R.ids[i]):-1;let at;
+   if(j>=0&&other.faces[j]){const f=Math.min(1,Math.max(0,(t-A.at)/Math.max(1,B.at-A.at))),fa=R===A?face:other.faces[j],fb=R===A?other.faces[j]:face;at=(k,c)=>fa[k][c]*(1-f)+fb[k][c]*f;}
+   else{const velocity=R.motion?.[i]||[0,0],dt=paused?0:Math.max(-.06,Math.min(.06,(t-R.at)/1000));let dx=velocity[0]*dt,dy=velocity[1]*dt;const bound=Math.hypot(face[2][0]-face[3][0],face[2][1]-face[3][1])*.25,len=Math.hypot(dx,dy);if(len>bound&&bound>0){dx*=bound/len;dy*=bound/len;}at=(k,c)=>face[k][c]+(c?dy:dx);}
+   for(let k=0;k<8;k++){points[i*16+k*2]=at(k,0);points[i*16+k*2+1]=at(k,1);}
+   motion[i*2]=(points[i*16+4]+points[i*16+6])/2-(face[2][0]+face[3][0])/2;motion[i*2+1]=(points[i*16+5]+points[i*16+7])/2-(face[2][1]+face[3][1])/2;
+  });
+  const maskTexture=valid?R.mask:this.textures[1],swapTexture=valid?R.swap:this.textures[2];
   const draw=(frame,fbo,enabled,precomposed,compare,base=frame)=>{
    g.bindFramebuffer(g.FRAMEBUFFER,fbo);g.viewport(0,0,cw,ch);
    g.disable(g.DEPTH_TEST);g.disable(g.BLEND);g.disable(g.SCISSOR_TEST);g.disable(g.CULL_FACE);
    g.colorMask(true,true,true,true);g.useProgram(this.program);
-   [frame,this.textures[1],this.textures[2],this.textures[0],base].forEach((t,i)=>{g.activeTexture(g.TEXTURE0+i);g.bindTexture(g.TEXTURE_2D,t);g.bindSampler(i,null);});
+   [frame,maskTexture,swapTexture,frameTexture,base].forEach((t,i)=>{g.activeTexture(g.TEXTURE0+i);g.bindTexture(g.TEXTURE_2D,t);g.bindSampler(i,null);});
    g.uniform1i(this.loc('frameTex'),0);g.uniform1i(this.loc('regionTex'),1);g.uniform1i(this.loc('swapTex'),2);g.uniform1i(this.loc('baseTex'),4);
    g.uniform1i(this.loc('originalTex'),3);g.uniform1i(this.loc('gpupixelEnabled'),1);
    g.uniform2f(this.loc('texel'),1/cw,1/ch);g.uniform2f(this.loc('imageSize'),cw,ch);
@@ -69,7 +148,7 @@ class YingcheRenderer {
    for(const [key,value] of Object.entries(config.beauty))g.uniform1f(this.loc(key+'Value'),value);
    g.bindVertexArray(this.vao);g.drawArrays(g.TRIANGLES,0,3);
   };
-  let source=this.textures[0],sw=w,sh=h;
+  let source=frameTexture,sw=shown?cw:w,sh=shown?ch:h;
   if(swapOn){
    if(!this.composite){
     this.composite=g.createTexture();g.bindTexture(g.TEXTURE_2D,this.composite);
@@ -88,14 +167,16 @@ class YingcheRenderer {
   }
   let output=source;const p=config.beauty;
   if(config.enabled){
-   const key=[inputKey,cw,ch,p.smooth,p.detail,p.white,p.sharp,swapOn?this.data.id:0,swapOn?ahead:0,config.swapStrength].join(':');
+   const key=[this.lastFrameKey,cw,ch,p.smooth,p.detail,p.white,p.sharp,swapOn?R.id:0,swapOn?motion.join(','):0,config.swapStrength].join(':');
    if(key!==this.lastGPUKey){this.filtered=this.gpu.render(sw,sh,cw,ch,p,source);this.lastGPUKey=key;}
    output=this.filtered;
   }else this.lastGPUKey='';
   draw(output,null,config.enabled,true,config.compare,source);this.frames++;
-  this.status={trackingWeight:weight,trackingAgeMs:age,trackingLifetimeMs:lifetime,shownFaces:weight>0?faces.length:0,shownSwapFaces:swapOn?(this.data.swapFaces||0):0};return true;
+  this.status={trackingWeight:weight,trackingAgeMs:age,trackingLifetimeMs:lifetime,shownFaces:weight>0?faces.length:0,shownSwapFaces:swapOn?(R.swapFaces||0):0,
+   syncActive:this.syncActive,syncDelayMs:this.delayMs,displayLagMs:shown?now-shown.at:0,displayPts:shownPts,frameSlots:this.ring.length,bracketed:!!(A&&B),
+   drawnEyes:faces.length?[[points[0],points[1]],[points[2],points[3]]]:null};return true;
  }
- dispose(){if(this.disposed)return;this.disposed=true;this.gpu.dispose();const g=this.gl;this.textures.forEach(t=>g.deleteTexture(t));if(this.composite)g.deleteTexture(this.composite);if(this.compositeFbo)g.deleteFramebuffer(this.compositeFbo);g.deleteVertexArray(this.vao);g.deleteProgram(this.program);g.getExtension('WEBGL_lose_context')?.loseContext();}
+ dispose(){if(this.disposed)return;this.disposed=true;this.gpu.dispose();const g=this.gl;this.textures.forEach(t=>g.deleteTexture(t));this.ring.forEach(s=>g.deleteTexture(s.tex));this.results.forEach(r=>{g.deleteTexture(r.mask);g.deleteTexture(r.swap);});g.deleteFramebuffer(this.readFbo);g.deleteFramebuffer(this.drawFbo);if(this.composite)g.deleteTexture(this.composite);if(this.compositeFbo)g.deleteFramebuffer(this.compositeFbo);g.deleteVertexArray(this.vao);g.deleteProgram(this.program);g.getExtension('WEBGL_lose_context')?.loseContext();}
 }
 globalThis.YingcheRenderer=YingcheRenderer;
 })();
