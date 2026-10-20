@@ -54,7 +54,6 @@ class SwapEngine:
   h,w=image.shape[:2];bgr=cv2.cvtColor(image,cv2.COLOR_RGB2BGR);patches=[]
   with self.lock:
    if self.source is None:return []
-   if not any(track_id in selected for track_id in ids):return []
    detected=self.detect(bgr);used=set()
    for pts,track_id in zip(faces,ids):
     if track_id not in selected:continue
@@ -104,17 +103,11 @@ class AsyncSwap:
    selected=[self.target_id] if self.target_id is not None else []
   key=(self.epoch,req.get('pts'),mode,tuple(selected),float(req.get('swapFeather',35)))
   with self.cv:
-   if key==self.last_key:return key
+   if key==self.last_key:return
    self.last_key=key
    self.pending={'image':image,'faces':[p.copy() for p in faces],'ids':list(ids),'selected':selected,
      'epoch':self.epoch,'key':key,'sampleTime':req.get('sampleTime',0),'pts':req.get('pts',0)}
    self.cv.notify()
-  return key
- def wait(self,key,timeout):
-  # Lets the caller reply with a patch from the frame it is answering instead of the previous one.
-  if key is None:return False
-  with self.cv:
-   return self.cv.wait_for(lambda:self.closed or (self.result is not None and self.result.get('key')==key) or (self.pending is None and self.running is None),timeout)
  def _loop(self):
   while True:
    with self.cv:
@@ -125,7 +118,7 @@ class AsyncSwap:
    try:patches=self.engine.infer(job['image'],job['faces'],job['ids'],job['selected'])
    except Exception as exc:patches=[];error=str(exc)
    with self.cv:
-    self.running=None;self.cv.notify_all()
+    self.running=None
     if job['epoch']==self.epoch:
      previous=self.result
      # A missed secondary detector must not erase a still-tracked face for one frame.
@@ -147,12 +140,9 @@ class AsyncSwap:
   # A stale or geometrically inconsistent patch must never float over a different face.
   if age>260:info['swapState']='expired';return output,info
   freshness=float(np.clip((260-age)/100,0,1))
-  # A patch generated from this very frame is already in place; its stored points may be the
-  # previous frame's landmarks that were only used to pick the target early.
-  same_frame=result['sampleTime']==req.get('sampleTime',0) and result['pts']==req.get('pts',0)
   for patch in result['patches']:
    if patch['id'] not in ids:info['swapState']='track-mismatch';continue
-   pts=faces[ids.index(patch['id'])];old=pts if same_frame else patch['points']
+   pts=faces[ids.index(patch['id'])];old=patch['points']
    src=np.float32(old[ANCHORS]*[w,h]);dst=np.float32(pts[ANCHORS]*[w,h])
    motion,inliers=cv2.estimateAffinePartial2D(src,dst,method=cv2.RANSAC,ransacReprojThreshold=3,maxIters=100)
    if motion is None or inliers is None or inliers.mean()<.6:info['swapState']='alignment-rejected';continue

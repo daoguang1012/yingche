@@ -22,8 +22,7 @@ class YingcheGPUPixel {
   const m=this.module;
   let sourceId=this.handles.get(texture);
   if(!sourceId){sourceId=m.GL.getNewId(m.GL.textures);texture.name=sourceId;m.GL.textures[sourceId]=texture;this.handles.set(texture,sourceId);}
-  // Brightening is a luminance lift in the renderer shader; lookup whitening desaturated skin.
-  const id=m._yingche_render(sourceId,sw,sh,w,h,p.smooth,p.detail,0,p.sharp);
+  const id=m._yingche_render(sourceId,sw,sh,w,h,p.smooth,p.detail,p.white,p.sharp);
   if(!id||!m.GL.textures[id])throw Error('GPUPixel 处理失败：'+m.UTF8ToString(m._yingche_error()));
   return m.GL.textures[id];
  }

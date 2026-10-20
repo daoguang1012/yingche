@@ -156,8 +156,8 @@ public:
         if(!QFileInfo::exists(path("models/face_landmarker.task"))){
             fail("缺少人脸模型","运行 DownloadModels.cmd 并选择 1 安装约 4 MB 的人脸追踪模型，完成后点「重试」。");models_->show();return;
         }
-        if(!QFileInfo::exists(path("app/face_engine_v061/FaceEngine.exe"))&&!QFileInfo::exists(path("tools/python/Scripts/python.exe"))){
-            fail("缺少本地引擎","找不到 app/face_engine_v061/FaceEngine.exe，请重新完整解压。");return;
+        if(!QFileInfo::exists(path("app/face_engine_v041/FaceEngine.exe"))&&!QFileInfo::exists(path("tools/python/Scripts/python.exe"))){
+            fail("缺少本地引擎","找不到 app/face_engine_v041/FaceEngine.exe，请重新完整解压。");return;
         }
         probe();
     }
@@ -221,7 +221,7 @@ private:
         setState(State::Starting,"正在启动本地引擎…","首次启动需要载入人脸模型，通常几秒内完成。");
         append(QString("[%1] 启动引擎").arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
         const QStringList bridge={"--bridge",path("models/face_landmarker.task"),path("edge-extension/bridge-config.json")};
-        const QString packaged=path("app/face_engine_v061/FaceEngine.exe");
+        const QString packaged=path("app/face_engine_v041/FaceEngine.exe");
         if(QFileInfo::exists(packaged))engine_->start(packaged,bridge);
         else engine_->start(path("tools/python/Scripts/python.exe"),QStringList{"-u",path("tools/face_worker.py")}+bridge);
     }
