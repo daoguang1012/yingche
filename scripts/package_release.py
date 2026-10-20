@@ -48,18 +48,18 @@ def prepare(stage, runtime, service_only=False):
     for name in executables:
         shutil.copy2(runtime / name, stage / name)
     ignore = shutil.ignore_patterns('__pycache__', '*.pyc', '*.onnx', '*.task', '*.tflite', '.git')
-    folders = ['platforms', 'styles', 'face_engine_v041'] if service_only else ['generic', 'gpupixel', 'imageformats', 'networkinformation', 'platforms', 'styles', 'tls', 'face_engine_v041', 'face_engine_v060']
+    # One worker (face_engine_v061) now serves desktop analysis, the player's Edge connection and the service.
+    folders = ['platforms', 'styles', 'face_engine_v061'] if service_only else ['generic', 'gpupixel', 'imageformats', 'networkinformation', 'platforms', 'styles', 'tls', 'face_engine_v061']
     for name in folders:
         shutil.copytree(runtime / 'app' / name, stage / 'app' / name, ignore=ignore)
     (stage / 'models').mkdir()
     (stage / 'models/README.txt').write_text('Native face models are installed explicitly using DownloadModels.cmd. See MODELS.md.\n', encoding='utf-8')
     assert not (stage / 'data').exists()
     assert not any((stage / 'app').rglob('*.onnx'))
-    engines = ['app/face_engine_v041/FaceEngine.exe'] + ([] if service_only else ['app/face_engine_v060/FaceEngine.exe'])
-    for name in executables + engines:
+    for name in executables + ['app/face_engine_v061/FaceEngine.exe']:
         assert digest(stage / name) == digest(runtime / name), name
     if service_only:
-        assert not (stage / 'app/BeautyPlayerV060.exe').exists() and not (stage / 'app/face_engine_v060').exists()
+        assert not (stage / 'app/BeautyPlayerV060.exe').exists()
     manifest(stage)
     print('STAGED', stage, flush=True)
 

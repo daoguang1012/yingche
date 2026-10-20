@@ -1,4 +1,4 @@
-const POPUP_VERSION='0.6.0';
+const POPUP_VERSION='0.6.1';
 const $=id=>document.getElementById(id);
 const PARAMETERS=[['smooth','磨皮',0,200],['detail','纹理保留',0,150],['white','肤色提亮',-100,200],['warm','冷暖',-100,100],['pink','红润',0,150],['slim','瘦脸 / 丰脸',-100,150],['eyes','大眼 / 小眼',-100,150],['chin','下巴',-100,100],['nose','鼻翼',-100,100],['lip','唇色',0,150],['blush','腮红',0,150],['sharp','清晰度',0,150]];
 const PRESETS={natural:{smooth:35,detail:70,white:15,warm:0,pink:8,slim:0,eyes:0,chin:0,nose:0,lip:0,blush:0,sharp:10}};

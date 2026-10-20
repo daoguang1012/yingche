@@ -23,6 +23,24 @@ uniform float effectWeights[4];
 uniform float smoothValue, detailValue, whiteValue, warmValue, pinkValue;
 uniform float slimValue, eyesValue, chinValue, noseValue, lipValue, blushValue, sharpValue;
 float distancePx(vec2 a, vec2 b) { return length((a-b)*imageSize); }
+float luma(vec3 c){return dot(c,vec3(.299,.587,.114));}
+// Frequency-separated skin: GPUPixel supplies only the smoothed fine texture. Large-scale shading
+// and skin hue come from the unfiltered frame, so the face keeps its form and colour and matches
+// the neck; chroma is only partly evened out to soften blotches and redness.
+vec3 skinTone(vec2 p,float radius){
+    vec3 b=texture(baseTex,p).rgb,g=texture(frameTex,p).rgb,lowB=vec3(0.),lowG=vec3(0.);
+    for(int i=0;i<12;i++){
+        float a=float(i)*.5235988;vec2 o=floor(vec2(cos(a),sin(a))*radius*((i&1)==0?1.:.55)+.5)*texel;
+        lowB+=texture(baseTex,p+o).rgb;lowG+=texture(frameTex,p+o).rgb;
+    }
+    lowB/=12.;lowG/=12.;
+    // Smoothing attenuates mid-scale texture (spots, fine lines); texture retention spares part of it.
+    // Colour is kept as colour-minus-luma, so zero settings reproduce the frame exactly.
+    float s=clamp(smoothValue/100.,0.,1.),keep=clamp(detailValue/150.,0.,1.);
+    float yb=luma(b),yl=luma(lowB);
+    float y=yl+(luma(g)-luma(lowG))*(1.-.75*s*(1.-.5*keep));
+    return clamp(vec3(y)+mix(b-yb,lowB-yl,s*.5),0.,1.);
+}
 vec2 eyeWarp(vec2 p,vec2 c,float radius,float amount) {
     float t=clamp(1.0-distancePx(p,c)/max(radius,1.0),0.0,1.0);
     return c+(p-c)*(1.0-amount*t*t);
@@ -71,18 +89,19 @@ void main() {
     p=vec2(t.x,1.0-t.y);
     vec3 src=sourceAt(p);
     if(enabled==0) {frag=vec4(src,1.);return;}
-    vec2 maskUV=t;
+    vec2 maskUV=t;float radius=6.;
     for(int i=0;i<faceCount;i++) {
-        vec2 center=(points[i*8+2]+points[i*8+3])*.5;
-        if(distancePx(t,center)<distancePx(points[i*8+2],points[i*8+3])*.8)maskUV=t-faceMotion[i];
+        vec2 center=(points[i*8+2]+points[i*8+3])*.5;float width=distancePx(points[i*8+2],points[i*8+3]);
+        if(distancePx(t,center)<width*.8){maskUV=t-faceMotion[i];radius=max(3.,width*.07);}
     }
     vec3 masks=texture(regionTex,maskUV).rgb*trackingWeight;
-    // GPUPixel remains the existing filter, but only current supported skin is blended.
-    if(gpupixelEnabled==1)src=mix(texture(baseTex,p).rgb,src,masks.r);
+    // GPUPixel remains the texture filter, but only current supported skin is blended.
+    if(gpupixelEnabled==1)src=mix(texture(baseTex,p).rgb,skinTone(p,radius),masks.r);
     vec3 skin=src;
     float bright=whiteValue/200.;
-    if(gpupixelEnabled==1 && bright>=0.) bright=0.;
-    if(bright>=0.) skin=mix(skin,sqrt(max(skin,vec3(0.))),bright*.9);
+    // Luminance-only lift: brightens without washing the skin towards grey.
+    float yy=luma(skin);
+    if(bright>=0.) skin+=vec3(bright*1.2*yy*(1.-yy));
     else skin*=1.0+bright*.65;
     skin+=vec3(.055,-.012,-.055)*(warmValue/100.);
     skin+=vec3(.035,-.015,.005)*(pinkValue/150.);

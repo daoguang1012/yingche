@@ -16,6 +16,7 @@ RIGHT_EYE = [362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398]
 LIPS = [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185]
 INNER = [78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191]
 BROWS = [[70,63,105,66,107,55,65,52,53,46], [336,296,334,293,300,276,283,282,295,285]]
+SWAP_WAIT_SECONDS = .045
 
 def write(obj):
     sys.stdout.write(json.dumps(obj, separators=(',', ':')) + '\n')
@@ -90,14 +91,17 @@ def analyze(image, detector, previous, reset, locator=None, provided=None, landm
         face_width = max(10., float(np.linalg.norm((pts[234]-pts[454])*[w,h])))
         dilation = max(3, int(face_width * .018) | 1)
         protection = cv2.dilate(protection,np.ones((dilation,dilation),np.uint8))
-        skin = cv2.subtract(skin,protection)
         poly(lip,pts,LIPS,255)
         poly(lip,pts,INNER,0)
         for indices in [[50,101,205],[280,330,425]]:
             p = np.mean(pts[indices],axis=0)*[w,h]
             cv2.ellipse(cheek,tuple(p.astype(int)),(max(2,int(face_width*.13)),max(2,int(face_width*.07))),0,0,360,220,-1)
         sigma = max(1.2, face_width*.018)
-        skin = cv2.GaussianBlur(skin,(0,0),sigma)
+        # Wide fade at the face outline (no visible boundary towards hair, jaw and neck), but a
+        # tight one around eyes, brows and lips so the skin right next to them is still treated.
+        outline = cv2.GaussianBlur(cv2.erode(skin,np.ones((dilation,dilation),np.uint8)),(0,0),max(1.5,face_width*.035))
+        protection = cv2.GaussianBlur(protection,(0,0),sigma*.6)
+        skin = (outline.astype(np.float32)*(255-protection.astype(np.float32))/255).astype(np.uint8)
         lip = cv2.GaussianBlur(lip,(0,0),max(.6,sigma*.35))
         cheek = cv2.GaussianBlur(cheek,(0,0),sigma*1.5)
         if stability is not None:
@@ -174,6 +178,12 @@ class FaceProcessor:
         reset=stream_generation!=self.generation or cut
         if reset:self.stability.reset()
         if reset and self.swap_async:self.swap_async.reset()
+        swapping=bool(req.get('swapEnabled') and self.source_ready)
+        swap_key=None
+        # Start the swap on this frame now, picking the target from the previous frame's tracks,
+        # so neural inference overlaps landmark tracking instead of trailing it by a request.
+        if swapping and not reset and self.previous and len(self.previous)==len(self.tracker.ids):
+            swap_key=self.swap_async.submit(image,self.previous,self.tracker.ids,req)
         self.previous,motion=self.tracker.update(image,sample_time,reset)
         stable=bool(req.get('stableBeauty'))
         points,mask,self.previous=analyze(image,self.detector,[],True,provided=self.previous,
@@ -184,8 +194,10 @@ class FaceProcessor:
         result['sceneCut']=bool(cut)
         result['faceSignals']=[{'flowQuality':s.get('flowQuality'),'confirmationAgeMs':round(s['confirmationAge']*1000,1)} for s in self.tracker.states]
         result['effectWeights']=[self.stability.history.get(s['id'],{}).get('strength',0.) for s in self.tracker.states] if stable else [1.]*len(points)
-        if req.get('swapEnabled') and self.source_ready:
-            self.swap_async.submit(image,self.previous,self.tracker.ids,req)
+        if swapping:
+            if swap_key is None:swap_key=self.swap_async.submit(image,self.previous,self.tracker.ids,req)
+            # Bounded: a slow (CPU) swap falls back to the latest finished patch instead of stalling video.
+            self.swap_async.wait(swap_key,SWAP_WAIT_SECONDS)
             rgba,info=self.swap_async.compose(image,self.previous,self.tracker.ids,req,OVAL)
             result.update(info)
             if info['swapFaces']:

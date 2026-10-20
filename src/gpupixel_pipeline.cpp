@@ -44,7 +44,8 @@ unsigned int GPUPixelPipeline::render(unsigned int sourceFbo,int width,int heigh
  // Upstream's desktop shader gates sharpening on blurAlpha > 0. Keep the independent
  // clarity control usable at zero smoothing without a visible smoothing contribution.
  impl_->beauty->SetBlurAlpha(std::max(blur,sharpen>0.f?1.e-6f:0.f));
- impl_->beauty->SetWhite(std::clamp(val("white")/200.f,0.f,1.f));
+ // Brightening is a luminance lift in beauty.frag; the lookup whitening desaturated skin.
+ impl_->beauty->SetWhite(0.f);
  impl_->beauty->SetSharpen(sharpen);
  impl_->beauty->SetInputFramebuffer(impl_->input);impl_->beauty->Render();
  auto output=impl_->beauty->GetFramebuffer();glBindVertexArray(0);return output?output->GetTexture():0;

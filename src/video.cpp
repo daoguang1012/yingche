@@ -433,7 +433,7 @@ void VideoWidget::startWorker() {
         workerReady_=false; busy_=false; invalidateFaces();
         if(!stopping_) emit analysisStatus("人脸引擎已停止 · 局部效果暂停");
     });
-    const QString packaged=QDir(root_).filePath("app/face_engine_v060/FaceEngine.exe");
+    const QString packaged=QDir(root_).filePath("app/face_engine_v061/FaceEngine.exe");
     if(QFileInfo::exists(packaged)) worker_->start(packaged,{QDir(root_).filePath("models/face_landmarker.task")});
     else worker_->start(QDir(root_).filePath("tools/python/Scripts/python.exe"),
         {"-u",QDir(root_).filePath("tools/face_worker.py"),QDir(root_).filePath("models/face_landmarker.task")});

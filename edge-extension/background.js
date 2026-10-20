@@ -1,4 +1,4 @@
-const EXTENSION_VERSION='0.6.0';
+const EXTENSION_VERSION='0.6.1';
 const BASE='http://127.0.0.1:18766';
 function requireCurrentBridge(data){if(data.version!=='0.4.1')throw Error('本地引擎版本不符：请运行映澈后台服务，或在播放器重新启用 Edge 连接（需要 0.4.1 桥接协议）');return data;}
 const DEFAULT={interpolation:false,vsrCompatible:true,enabled:true,compare:false,swapEnabled:false,swapTarget:'largest',swapStrength:100,swapFeather:35,beauty:{smooth:35,detail:70,white:15,warm:0,pink:8,slim:0,eyes:0,chin:0,nose:0,lip:0,blush:0,sharp:10}};

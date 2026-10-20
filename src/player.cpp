@@ -257,7 +257,7 @@ void PlayerWindow::setBridgeEnabled(bool enabled) {
     if(bridge_->state()!=QProcess::NotRunning)return;
     bridgeOutput_.clear();bridgeLabel_->setText("正在启动 Edge 本地连接…");
     const QString model=QDir(root_).filePath("models/face_landmarker.task"),config=QDir(root_).filePath("edge-extension/bridge-config.json");
-    const QString packaged=QDir(root_).filePath("app/face_engine_v041/FaceEngine.exe");
+    const QString packaged=QDir(root_).filePath("app/face_engine_v061/FaceEngine.exe");
     if(QFileInfo::exists(packaged))bridge_->start(packaged,{"--bridge",model,config});
     else bridge_->start(QDir(root_).filePath("tools/python/Scripts/python.exe"),{"-u",QDir(root_).filePath("tools/face_worker.py"),"--bridge",model,config});
 }
